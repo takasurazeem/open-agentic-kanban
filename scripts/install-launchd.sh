@@ -7,7 +7,19 @@ set -euo pipefail
 
 LABEL=com.agentic-kanban.board
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-NODE="$(command -v node)"
+# Prefer a stable system-wide node; a version-manager path (nvm) breaks when that version is removed.
+NODE=""
+for c in /opt/homebrew/bin/node /usr/local/bin/node; do
+  if [[ -x "$c" ]]; then NODE="$c"; break; fi
+done
+if [[ -z "$NODE" ]]; then
+  NODE="$(command -v node)"
+  case "$NODE" in
+    *"/.nvm/"*|*"/.fnm/"*|*"/.volta/"*|*"/.asdf/"*)
+      echo "Warning: using $NODE. The service will stop working if that node version is removed;" >&2
+      echo "         install node via Homebrew (brew install node) and re-run to avoid this." >&2 ;;
+  esac
+fi
 PORT="${PORT:-5173}"
 DATA_DIR="${KANBAN_DATA_DIR:-$HOME/Developer/kanban-data}"
 LOG="$HOME/Library/Logs/agentic-kanban.log"
@@ -54,6 +66,16 @@ if lsof -ti ":$PORT" >/dev/null 2>&1; then
   exit 1
 fi
 
-launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$PLIST"
+DOMAIN="gui/$(id -u)"
+launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+for _ in $(seq 1 20); do   # wait until the old job is really gone
+  launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1 || break
+  sleep 0.5
+done
+ok=0
+for _ in 1 2 3 4 5; do     # "Bootstrap failed: 5" can happen right after a bootout; retry
+  if launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null; then ok=1; break; fi
+  sleep 1
+done
+if [[ $ok -ne 1 ]]; then launchctl bootstrap "$DOMAIN" "$PLIST"; fi
 echo "Installed $LABEL -> http://localhost:$PORT  (logs: $LOG)"

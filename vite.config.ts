@@ -15,5 +15,5 @@ function boardApi(): Plugin {
 
 export default defineConfig({
   plugins: [react(), boardApi()],
-  server: { port: 5173, watch: { ignored: ['**/data/**'] } },
+  server: { port: 5173, strictPort: true, watch: { ignored: ['**/data/**'] } },
 });

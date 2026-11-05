@@ -15,12 +15,20 @@ import YAML from 'yaml';
 import { seed } from './seed.mjs';
 import { DEFAULT_STATUSES } from './model.mjs';
 import * as gitsync from './gitsync.mjs';
+import { appendLines } from './fsutil.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const expand = (p) => (p === '~' ? os.homedir() : p.startsWith('~/') ? path.join(os.homedir(), p.slice(2)) : p);
 export const DATA_DIR = path.resolve(expand(process.env.KANBAN_DATA_DIR || '~/Developer/kanban-data'));
 
 export { AGENT_STATES, PRIORITIES, SIZES, DEFAULT_STATUSES } from './model.mjs';
+
+export class HttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
 
 const listeners = new Set();
 const log = (...a) => console.warn('[store]', ...a);
@@ -85,7 +93,7 @@ export function markdownToItem(text, number, fallbackTime) {
     body = m[2].replace(/^\r?\n/, '').replace(/\r\n/g, '\n');
     if (body.endsWith('\n')) body = body.slice(0, -1);
   }
-  return normalizeItem({ ...front, number: front.number ?? number, body }, number, fallbackTime);
+  return normalizeItem({ ...front, body, number }, number, fallbackTime);
 }
 
 const stable = (v) =>
@@ -95,23 +103,63 @@ const stable = (v) =>
 
 /* ---------- disk helpers ---------- */
 
-const ownWrites = new Set(); // paths we touched very recently (informational; reloads are content-compared)
-const safeId = (id) => /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(String(id));
+const safeId = (id) => typeof id === 'string' && id.length <= 64 && /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(id);
+const validNumber = (n) => typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 1e9;
+const checkId = (id) => {
+  if (!safeId(id)) throw new HttpError(400, `Invalid project id "${id}"`);
+  return id;
+};
+const checkNum = (n) => {
+  if (!validNumber(n)) throw new HttpError(400, `Invalid item number "${n}"`);
+  return n;
+};
 const p = {
   actors: () => path.join(DATA_DIR, 'actors.json'),
-  dir: (pid) => path.join(DATA_DIR, pid),
-  project: (pid) => path.join(DATA_DIR, pid, 'project.json'),
-  items: (pid) => path.join(DATA_DIR, pid, 'items'),
-  md: (pid, n) => path.join(DATA_DIR, pid, 'items', `${n}.md`),
-  log: (pid, n) => path.join(DATA_DIR, pid, 'items', `${n}.activity.jsonl`),
+  dir: (pid) => path.join(DATA_DIR, checkId(pid)),
+  project: (pid) => path.join(DATA_DIR, checkId(pid), 'project.json'),
+  items: (pid) => path.join(DATA_DIR, checkId(pid), 'items'),
+  md: (pid, n) => path.join(DATA_DIR, checkId(pid), 'items', `${checkNum(n)}.md`),
+  log: (pid, n) => path.join(DATA_DIR, checkId(pid), 'items', `${checkNum(n)}.activity.jsonl`),
 };
+
+// Signature (mtime:size) of every file as last read or written by us; a mismatch means someone else changed it.
+const sigs = new Map();
+const sigOf = (f) => {
+  try {
+    const st = fs.statSync(f);
+    return `${st.mtimeMs}:${st.size}`;
+  } catch {
+    return null;
+  }
+};
+const track = (f) => sigs.set(f, sigOf(f));
+
+// Things we could not load or that look wrong; reported by GET /api/sync and never overwritten.
+const problems = new Map();
+const setProblem = (key, o) => {
+  problems.set(key, o);
+  log(o.message);
+};
+const clearProblem = (key) => problems.delete(key);
+export const getProblems = () => [...problems.values()];
 
 function writeAtomic(file, text) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = path.join(path.dirname(file), `.${path.basename(file)}.tmp-${process.pid}`);
   fs.writeFileSync(tmp, text);
   fs.renameSync(tmp, file);
-  ownWrites.add(file);
+  track(file);
+}
+
+function append(file, text) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  appendLines(file, text);
+  track(file);
+}
+
+function removeFile(file) {
+  fs.rmSync(file, { force: true });
+  sigs.set(file, null);
 }
 
 const jsonl = (entries) => entries.map((e) => JSON.stringify(e)).join('\n') + (entries.length ? '\n' : '');
@@ -124,21 +172,27 @@ const readText = (f) => {
 };
 
 function readActivity(file) {
+  track(file);
   const text = readText(file);
   if (!text) return [];
   const out = [];
+  let bad = 0;
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;
     try {
       out.push(JSON.parse(line));
     } catch {
-      log('skipping bad activity line in', file);
+      bad++;
     }
   }
+  const key = `bad-activity:${file}`;
+  if (bad) setProblem(key, { kind: 'bad-activity', path: path.relative(DATA_DIR, file), message: `${path.relative(DATA_DIR, file)}: skipped ${bad} unparseable line(s)` });
+  else clearProblem(key);
   return out;
 }
 
 function readItem(pid, n) {
+  track(p.md(pid, n));
   const text = readText(p.md(pid, n));
   if (text == null) return null;
   let t;
@@ -151,6 +205,7 @@ function readItem(pid, n) {
 }
 
 function readProjectMeta(pid) {
+  track(p.project(pid));
   const text = readText(p.project(pid));
   if (text == null) return null;
   return normalizeProject(JSON.parse(text), pid);
@@ -166,11 +221,18 @@ function readProject(pid) {
   for (const f of names) {
     const m = /^(\d+)\.md$/.exec(f);
     if (!m) continue;
+    const n = Number(m[1]);
+    const key = `item:${pid}/${n}`;
+    if (String(n) !== m[1] || !validNumber(n)) {
+      setProblem(key, { kind: 'unreadable-item', project: pid, number: null, path: `${pid}/items/${f}`, message: `${pid}/items/${f}: not a canonical item filename; ignored` });
+      continue;
+    }
     try {
-      const it = readItem(pid, Number(m[1]));
+      const it = readItem(pid, n);
       if (it) proj.items.push(it);
+      clearProblem(key);
     } catch (e) {
-      log(`skipping ${pid}/items/${f}: ${e.message}`);
+      setProblem(key, { kind: 'unreadable-item', project: pid, number: n, path: `${pid}/items/${f}`, message: `${pid}/items/${f}: ${e.message} (left untouched)` });
     }
   }
   proj.items.sort((a, b) => a.number - b.number);
@@ -181,6 +243,7 @@ const sortProjects = (arr) => arr.sort((a, b) => a.createdAt.localeCompare(b.cre
 
 function readAll() {
   let actors = [];
+  track(p.actors());
   try {
     actors = JSON.parse(readText(p.actors()) ?? '[]');
   } catch (e) {
@@ -189,6 +252,12 @@ function readAll() {
   const projects = [];
   for (const d of fs.readdirSync(DATA_DIR, { withFileTypes: true })) {
     if (!d.isDirectory() || d.name.startsWith('.')) continue;
+    if (!safeId(d.name)) {
+      if (fs.existsSync(path.join(DATA_DIR, d.name, 'project.json'))) {
+        setProblem(`project:${d.name}`, { kind: 'skipped-project', path: d.name, message: `${d.name}: folder name is not a valid project id; skipped` });
+      }
+      continue;
+    }
     try {
       const proj = readProject(d.name);
       if (proj) projects.push(proj);
@@ -216,6 +285,40 @@ function writeEverything(s) {
   }
 }
 
+/* ---------- one writer per data dir ---------- */
+
+const LOCK = path.join(DATA_DIR, '.kanban.lock');
+function acquireLock() {
+  for (let i = 0; i < 3; i++) {
+    try {
+      fs.writeFileSync(LOCK, String(process.pid), { flag: 'wx' });
+      process.on('exit', () => {
+        try {
+          if (fs.readFileSync(LOCK, 'utf8') === String(process.pid)) fs.unlinkSync(LOCK);
+        } catch {}
+      });
+      return;
+    } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      const pid = Number(readText(LOCK));
+      let alive = false;
+      if (pid && pid !== process.pid) {
+        try {
+          process.kill(pid, 0);
+          alive = true;
+        } catch (err) {
+          alive = err.code === 'EPERM';
+        }
+      }
+      if (alive) throw new Error(`Data dir ${DATA_DIR} is already in use by process ${pid}. Stop it first (or set KANBAN_DATA_DIR).`);
+      if (pid === process.pid) return;
+      log(`taking over stale lock from process ${pid}`);
+      fs.rmSync(LOCK, { force: true });
+    }
+  }
+  throw new Error(`Could not lock ${DATA_DIR}`);
+}
+
 /* ---------- startup: load, migrate or seed ---------- */
 
 function importSource() {
@@ -225,9 +328,10 @@ function importSource() {
 
 function loadOrInit() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
+  acquireLock();
   // Pull remote changes first so a fresh machine picks up the existing board.
   gitsync.init(DATA_DIR);
-  const hasProjects = fs.readdirSync(DATA_DIR, { withFileTypes: true }).some((d) => d.isDirectory() && !d.name.startsWith('.') && fs.existsSync(p.project(d.name)));
+  const hasProjects = fs.readdirSync(DATA_DIR, { withFileTypes: true }).some((d) => d.isDirectory() && safeId(d.name) && fs.existsSync(p.project(d.name)));
   if (!hasProjects && !fs.existsSync(p.actors())) {
     const src = importSource();
     let s;
@@ -267,19 +371,35 @@ export function getState() {
   return state;
 }
 
-export class HttpError extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
-}
-
 function emit(event) {
   for (const l of listeners) l({ ...event, version: state.version });
 }
 
+/** Reject drafts that would write unsafe paths, clobber unreadable files, or reuse a number. */
+function validate(prev, next) {
+  const prevById = new Map(prev.projects.map((x) => [x.id, x]));
+  for (const proj of next.projects) {
+    const old = prevById.get(proj.id);
+    if (!old) checkId(proj.id);
+    const oldItems = new Map((old?.items ?? []).map((x) => [x.number, x]));
+    for (const it of proj.items) {
+      const o = oldItems.get(it.number);
+      if (o && stable(o) === stable(it)) continue;
+      checkId(proj.id);
+      checkNum(it.number);
+      if (!o && fs.existsSync(p.md(proj.id, it.number))) {
+        throw new HttpError(409, `${proj.id}/items/${it.number}.md already exists on disk; refusing to overwrite it`);
+      }
+      if (problems.has(`item:${proj.id}/${it.number}`)) {
+        throw new HttpError(409, `${proj.id}#${it.number} has an unreadable file on disk; fix it by hand first`);
+      }
+    }
+  }
+}
+
 /** Persist only the differences between `prev` and `next`; returns human-readable change notes. */
 function persist(prev, next) {
+  validate(prev, next);
   const notes = new Map(); // key -> string[]
   const note = (key, text) => notes.set(key, [...(notes.get(key) ?? []), text]);
 
@@ -292,10 +412,10 @@ function persist(prev, next) {
   for (const old of prev.projects) {
     if (nextIds.has(old.id)) continue;
     fs.rmSync(p.dir(old.id), { recursive: true, force: true });
+    for (const k of [...sigs.keys()]) if (k.startsWith(p.dir(old.id) + path.sep)) sigs.delete(k);
     note(`project ${old.id}`, 'project deleted');
   }
   for (const proj of next.projects) {
-    if (!safeId(proj.id)) throw new HttpError(400, `Invalid project id "${proj.id}"`);
     const old = prevById.get(proj.id);
     if (!old) {
       writeProjectMeta(proj);
@@ -319,8 +439,7 @@ function persist(prev, next) {
         continue;
       }
       const md = itemToMarkdown(it);
-      const mdChanged = md !== itemToMarkdown(o);
-      if (mdChanged) {
+      if (md !== itemToMarkdown(o)) {
         writeAtomic(p.md(proj.id, it.number), md);
         if (it.status !== o.status) note(key, `status → ${it.status}`);
         if (it.agent.state !== o.agent.state) note(key, `${it.agent.by ?? 'agent'} → ${it.agent.state}`);
@@ -330,9 +449,7 @@ function persist(prev, next) {
       const appendOnly = a.length >= b.length && b.every((e, i) => e === a[i] || stable(e) === stable(a[i]));
       if (appendOnly) {
         if (a.length > b.length) {
-          fs.mkdirSync(p.items(proj.id), { recursive: true });
-          fs.appendFileSync(p.log(proj.id, it.number), jsonl(a.slice(b.length)));
-          ownWrites.add(p.log(proj.id, it.number));
+          append(p.log(proj.id, it.number), jsonl(a.slice(b.length)));
           if (a.slice(b.length).some((e) => e.kind === 'comment')) note(key, 'commented');
           else if (!notes.has(key)) note(key, 'activity');
         }
@@ -342,8 +459,8 @@ function persist(prev, next) {
     }
     for (const o of old.items) {
       if (seen.has(o.number)) continue;
-      fs.rmSync(p.md(proj.id, o.number), { force: true });
-      fs.rmSync(p.log(proj.id, o.number), { force: true });
+      removeFile(p.md(proj.id, o.number));
+      removeFile(p.log(proj.id, o.number));
       note(`${proj.id}#${o.number}`, 'deleted');
     }
   }
@@ -352,25 +469,39 @@ function persist(prev, next) {
 
 /** Run `fn` against a draft of the state, persist what changed, and broadcast `event`. */
 export function mutate(fn, event) {
+  reconcile(); // always start from what is on disk
   const draft = structuredClone(state);
   const result = fn(draft);
   draft.version = (state.version ?? 0) + 1;
   const prev = state;
-  const notes = persist(prev, draft); // throws before swapping state if a write fails
+  const notes = persist(prev, draft); // throws before swapping state if validation fails
   state = draft;
   gitsync.changed(notes);
   emit(event);
   return result;
 }
 
-/* ---------- watching the data dir (hand edits, git pull) ---------- */
+/** Next free item number: above everything in memory, quarantined, or merely present on disk. */
+export function nextItemNumber(proj) {
+  let max = Math.max(0, ...proj.items.map((i) => i.number));
+  for (const pr of problems.values()) if (pr.project === proj.id && validNumber(pr.number)) max = Math.max(max, pr.number);
+  try {
+    for (const f of fs.readdirSync(p.items(proj.id))) {
+      const m = /^(\d+)\./.exec(f);
+      if (m) max = Math.max(max, Number(m[1]));
+    }
+  } catch {}
+  return max + 1;
+}
+
+/* ---------- picking up outside changes (hand edits, git pull) ---------- */
 
 function applyExternal(rel) {
   const parts = rel.split(path.sep);
-  if (parts[0].startsWith('.') && parts[0] !== '.') return null;
   if (parts.some((x) => x.startsWith('.') || x.includes('.tmp-'))) return null;
   const [first, second, third] = parts;
   if (parts.length === 1 && first === 'actors.json') {
+    track(p.actors());
     let actors;
     try {
       actors = JSON.parse(readText(p.actors()) ?? '[]');
@@ -416,13 +547,15 @@ function applyExternal(rel) {
     return { type: 'project', project: first, note: `${first}: settings edited externally` };
   }
   const m = second === 'items' && parts.length === 3 ? /^(\d+)\.(md|activity\.jsonl)$/.exec(third) : null;
-  if (!m) return null;
+  if (!m || String(Number(m[1])) !== m[1] || !validNumber(Number(m[1]))) return null;
   const n = Number(m[1]);
+  const key = `item:${first}/${n}`;
   let fresh;
   try {
     fresh = readItem(first, n);
+    clearProblem(key);
   } catch (e) {
-    log(`bad ${first}/items/${third}:`, e.message);
+    setProblem(key, { kind: 'unreadable-item', project: first, number: n, path: `${first}/items/${n}.md`, message: `${first}/items/${n}.md: ${e.message} (left untouched)` });
     return null;
   }
   const at = proj.items.findIndex((x) => x.number === n);
@@ -437,6 +570,60 @@ function applyExternal(rel) {
   return { type: 'item', project: first, number: n, note: `${first}#${n}: edited externally` };
 }
 
+function handleExternal(rel) {
+  let ev;
+  try {
+    ev = applyExternal(rel);
+  } catch (e) {
+    log('reload failed for', rel, e.message);
+  }
+  if (!ev) return; // our own write, or nothing relevant changed
+  const { note, ...event } = ev;
+  state.version = (state.version ?? 0) + 1;
+  gitsync.changed([note]);
+  emit(event);
+}
+
+/** Reload anything whose file differs from what we last read or wrote (covers the watcher's delay). */
+function reconcile() {
+  const dirty = new Set();
+  const chk = (file, rel) => {
+    if (sigOf(file) !== (sigs.get(file) ?? null)) dirty.add(rel);
+  };
+  try {
+    chk(p.actors(), 'actors.json');
+    const onDisk = new Set();
+    for (const d of fs.readdirSync(DATA_DIR, { withFileTypes: true })) {
+      if (!d.isDirectory() || !safeId(d.name)) continue;
+      const pid = d.name;
+      if (!fs.existsSync(p.project(pid))) continue;
+      onDisk.add(pid);
+      const proj = state.projects.find((x) => x.id === pid);
+      if (!proj) {
+        dirty.add(pid);
+        continue;
+      }
+      chk(p.project(pid), `${pid}/project.json`);
+      const files = new Set();
+      try {
+        for (const f of fs.readdirSync(p.items(pid))) if (/^[1-9]\d*\.(md|activity\.jsonl)$/.test(f)) files.add(f);
+      } catch {}
+      for (const it of proj.items) {
+        files.add(`${it.number}.md`);
+        files.add(`${it.number}.activity.jsonl`);
+      }
+      for (const f of files) {
+        if (!validNumber(Number(f.split('.')[0]))) continue;
+        chk(path.join(p.items(pid), f), `${pid}/items/${f}`);
+      }
+    }
+    for (const proj of state.projects) if (!onDisk.has(proj.id)) dirty.add(proj.id);
+  } catch (e) {
+    log('reconcile failed:', e.message);
+  }
+  for (const rel of dirty) handleExternal(rel);
+}
+
 const pending = new Map();
 function onFsEvent(_type, filename) {
   if (!filename) return;
@@ -447,17 +634,7 @@ function onFsEvent(_type, filename) {
     rel,
     setTimeout(() => {
       pending.delete(rel);
-      let ev;
-      try {
-        ev = applyExternal(rel);
-      } catch (e) {
-        log('reload failed for', rel, e.message);
-      }
-      if (!ev) return; // our own write, or nothing relevant changed
-      const { note, ...event } = ev;
-      state.version = (state.version ?? 0) + 1;
-      gitsync.changed([note]);
-      emit(event);
+      handleExternal(rel);
     }, 150),
   );
 }

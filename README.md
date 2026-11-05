@@ -37,6 +37,11 @@ and pushes after each commit (never force-pushes; git errors are logged, never f
 cd ~/Developer/kanban-data && gh repo create <name> --private --source . --push
 ```
 
+On a merge conflict the local version wins and the other device's version is recorded in the item's activity
+(project/actor files: saved under `.conflicts/`). Sync health is at `GET /api/sync` and shown in the top bar.
+Only one server can use a data dir at a time (`.kanban.lock`). The server listens on `127.0.0.1`; set `HOST` to change that
+(there is no auth), and write requests must be `application/json`.
+
 Env: `KANBAN_GIT_SYNC=0` turns git off, `KANBAN_COMMIT_DELAY_MS` (default 60000) and
 `KANBAN_COMMIT_MAX_MS` (300000) tune the debounce.
 

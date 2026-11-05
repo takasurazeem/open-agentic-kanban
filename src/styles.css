@@ -216,6 +216,7 @@ textarea.input { resize: vertical; line-height: 1.5; }
 .conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c-gray); }
 .conn-live .conn-dot { background: var(--c-green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-green) 25%, transparent); }
 .conn-offline .conn-dot { background: var(--c-red); }
+.conn-warn .conn-dot { background: var(--c-yellow); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-yellow) 25%, transparent); }
 
 .layout { flex: 1; min-height: 0; display: flex; }
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }

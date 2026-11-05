@@ -6,7 +6,7 @@ export class ApiError extends Error {}
 export async function api<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method,
-    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    headers: { 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
@@ -33,6 +33,17 @@ export const actions = {
   importLegacy: (projects: unknown[]) => api<{ added: string[] }>('POST', '/import', { projects }),
 };
 
+export interface SyncStatus {
+  enabled: boolean;
+  remote: string | null;
+  lastCommitAt: string | null;
+  lastPullAt: string | null;
+  lastPushAt: string | null;
+  lastError: string | null;
+  pending: boolean;
+  problems: { message: string }[];
+}
+
 export type Connection = 'connecting' | 'live' | 'offline';
 
 /**
@@ -43,6 +54,7 @@ export function useBoard() {
   const [state, setState] = useState<BoardState | null>(null);
   const [connection, setConnection] = useState<Connection>('connecting');
   const [error, setError] = useState<string | null>(null);
+  const [sync, setSync] = useState<SyncStatus | null>(null);
   const pending = useRef<number | null>(null);
 
   const refetch = useCallback(async () => {
@@ -54,17 +66,29 @@ export function useBoard() {
     }
   }, []);
 
+  const refreshSync = useCallback(() => {
+    api<SyncStatus>('GET', '/sync').then(setSync, () => {});
+  }, []);
+
   useEffect(() => {
     refetch();
+    refreshSync();
+    const poll = window.setInterval(refreshSync, 15000);
     const es = new EventSource('/api/events');
     es.onopen = () => setConnection('live');
     es.onerror = () => setConnection('offline');
     es.onmessage = () => {
       if (pending.current) window.clearTimeout(pending.current);
-      pending.current = window.setTimeout(refetch, 30);
+      pending.current = window.setTimeout(() => {
+        refetch();
+        refreshSync();
+      }, 30);
     };
-    return () => es.close();
-  }, [refetch]);
+    return () => {
+      es.close();
+      window.clearInterval(poll);
+    };
+  }, [refetch, refreshSync]);
 
   const optimistic = useCallback((fn: (draft: BoardState) => void) => {
     setState((s) => {
@@ -75,5 +99,5 @@ export function useBoard() {
     });
   }, []);
 
-  return { state, connection, error, setError, refetch, optimistic };
+  return { state, connection, sync, error, setError, refetch, optimistic };
 }

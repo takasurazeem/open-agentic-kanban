@@ -76,7 +76,7 @@ function useTheme() {
 }
 
 export default function App() {
-  const { state, connection, error, setError, optimistic } = useBoard();
+  const { state, connection, sync, error, setError, optimistic } = useBoard();
   const [route, setRoute] = useState<Route>(parseHash);
   const [theme, setTheme] = useTheme();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -157,10 +157,20 @@ export default function App() {
           Agentic Kanban
         </a>
         <span className="spacer" />
-        <span className={`conn conn-${connection}`} title={connection === 'live' ? 'Receiving live updates from agents' : 'Not connected'}>
-          <span className="conn-dot" />
-          {connection === 'live' ? 'Live' : connection === 'offline' ? 'Offline' : 'Connecting'}
-        </span>
+        {(() => {
+          const syncWarn = connection === 'live' && sync?.enabled && (sync.lastError || sync.problems.length > 0);
+          const tip = syncWarn
+            ? `Sync problem: ${sync.lastError ?? sync.problems.map((p) => p.message).join('; ')}`
+            : connection === 'live'
+              ? 'Receiving live updates from agents'
+              : 'Not connected';
+          return (
+            <span className={`conn conn-${syncWarn ? 'warn' : connection}`} title={tip}>
+              <span className="conn-dot" />
+              {syncWarn ? 'Sync issue' : connection === 'live' ? 'Live' : connection === 'offline' ? 'Offline' : 'Connecting'}
+            </span>
+          );
+        })()}
         <button
           className="icon-btn"
           title={`Theme: ${theme} (click to change)`}

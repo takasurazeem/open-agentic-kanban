@@ -10,6 +10,7 @@ import { flush } from './gitsync.mjs';
 
 const dist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
 const port = Number(process.env.PORT ?? 5173);
+const host = process.env.HOST ?? '127.0.0.1'; // local only by default; there is no auth
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.woff2': 'font/woff2' };
 
 http
@@ -26,8 +27,8 @@ http
       fs.createReadStream(file).pipe(res);
     }),
   )
-  .listen(port, () => {
-    console.log(`Open Agentic Kanban on http://localhost:${port}  (data: ${DATA_DIR})`);
+  .listen(port, host, () => {
+    console.log(`Open Agentic Kanban on http://${host}:${port}  (data: ${DATA_DIR})`);
   });
 
 // Commit any pending data changes before exiting (launchd / Ctrl-C).

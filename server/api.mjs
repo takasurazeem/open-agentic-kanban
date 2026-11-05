@@ -2,8 +2,9 @@
 // (one port for everything) and by server/index.mjs in production.
 import {
   getState, mutate, subscribe, HttpError, now, slugify,
-  findProject, findItem, findActor, pushActivity,
+  findProject, findItem, findActor, pushActivity, nextItemNumber, getProblems,
 } from './store.mjs';
+import * as gitsync from './gitsync.mjs';
 import { AGENT_STATES, PRIORITIES, SIZES, DEFAULT_STATUSES, STATUS_COLORS } from './model.mjs';
 import { fromLegacyProject } from './seed.mjs';
 
@@ -159,6 +160,8 @@ const route = (method, pattern, fn) => {
 
 route('GET', '/api/state', () => getState());
 
+route('GET', '/api/sync', () => ({ ...gitsync.status(), problems: getProblems() }));
+
 route('POST', '/api/actors', ({ body }) =>
   mutate((s) => {
     const id = slugify(body.id ?? body.name ?? '');
@@ -234,7 +237,7 @@ route('POST', '/api/projects/:pid/items', ({ params, body }) =>
     if (!body.title?.trim()) throw new HttpError(400, 'title is required');
     const status = body.status ?? p.statuses[0].id;
     const it = {
-      number: Math.max(0, ...p.items.map((i) => i.number)) + 1,
+      number: nextItemNumber(p),
       title: body.title.trim(), body: body.body ?? '', status, rank: nextRank(p, status),
       priority: oneOf(body.priority ?? null, [...PRIORITIES, null], 'priority'),
       size: oneOf(body.size ?? null, [...SIZES, null], 'size'),
@@ -370,6 +373,11 @@ export async function apiMiddleware(req, res, next) {
   if (!url.pathname.startsWith('/api/')) return next?.();
   if (url.pathname === '/api/events') return sse(req, res);
   try {
+    // Only JSON requests may change anything. Browsers can't send application/json cross-site without a
+    // CORS preflight (which we never grant), so other web pages can't drive this API.
+    if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(req.method) && !/^application\/json\b/i.test(req.headers['content-type'] ?? '')) {
+      return send(res, 415, { error: 'Content-Type must be application/json' });
+    }
     for (const r of routes) {
       if (r.method !== req.method) continue;
       const m = r.re.exec(url.pathname);
