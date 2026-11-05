@@ -13,8 +13,42 @@ npm run dev        # UI + API on http://localhost:5173
 
 For a production build: `npm run build && npm start`.
 
-The board is stored in `data/board.json` (one file — commit it, back it up, or point
-`KANBAN_DATA` somewhere else).
+## Where the data lives
+
+The code is public; your board is not part of it. Data lives in a separate folder, by default
+`~/Developer/kanban-data` (override with `KANBAN_DATA_DIR`), one file per item so it diffs and merges well:
+
+```
+actors.json
+<project>/project.json
+<project>/items/<n>.md               YAML front matter + markdown body (hand-editable)
+<project>/items/<n>.activity.jsonl   timeline, append-only
+```
+
+The server watches the folder, so hand edits and `git pull` show up live. On first start it creates
+the folder, runs `git init`, and auto-commits changes (about a minute after the last change, with a
+readable message like `demo#4: claude → needs_review`). A fresh folder gets a small demo project
+(or imports an old `data/board.json` / `KANBAN_IMPORT_JSON` if present).
+
+To back it up and sync between machines, add a private remote; the server then pulls every ~5 minutes
+and pushes after each commit (never force-pushes; git errors are logged, never fatal):
+
+```bash
+cd ~/Developer/kanban-data && gh repo create <name> --private --source . --push
+```
+
+Env: `KANBAN_GIT_SYNC=0` turns git off, `KANBAN_COMMIT_DELAY_MS` (default 60000) and
+`KANBAN_COMMIT_MAX_MS` (300000) tune the debounce.
+
+## Always on (macOS)
+
+```bash
+scripts/install-launchd.sh      # builds, then runs the board at login on http://localhost:5173
+scripts/uninstall-launchd.sh
+```
+
+It writes `~/Library/LaunchAgents/com.agentic-kanban.board.plist` (logs: `~/Library/Logs/agentic-kanban.log`).
+Stop `npm run dev` first since both use port 5173; `PORT` and `KANBAN_DATA_DIR` are read from the environment at install time.
 
 ## Connect Claude
 
