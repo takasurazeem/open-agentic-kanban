@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "kanban": {
+      "command": "node",
+      "args": ["server/mcp.mjs"],
+      "env": { "KANBAN_URL": "http://localhost:5173", "KANBAN_AGENT": "claude" }
+    }
+  }
+}

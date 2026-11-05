@@ -1,0 +1,32 @@
+{
+  "name": "open-agentic-kanban",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "start": "node server/index.mjs",
+    "mcp": "node server/mcp.mjs",
+    "typecheck": "tsc"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "highlight.js": "^11.10.0",
+    "mermaid": "^11.4.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^9.0.3",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "^7.0.2",
+    "vite": "^5.4.11"
+  }
+}

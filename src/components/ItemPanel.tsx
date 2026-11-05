@@ -1,0 +1,550 @@
+import { useEffect, useRef, useState } from 'react';
+import { actions } from '../api';
+import { PRIORITIES, SIZES, type Activity, type Actor, type Item, type Project } from '../types';
+import { AGENT_META, AgentBadge, Avatar, Label, PriorityChip, StatusPill, timeAgo } from './bits';
+import { Icon } from './Icon';
+import { Markdown } from './Markdown';
+import { Menu } from './Menu';
+
+type Run = (p: Promise<unknown>) => Promise<void>;
+
+export function ItemPanel({
+  project,
+  item,
+  actors,
+  onClose,
+  run,
+}: {
+  project: Project;
+  item: Item;
+  actors: Actor[];
+  onClose: () => void;
+  run: Run;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const patch = (p: Partial<Item>) => run(actions.updateItem(project.id, item.number, p));
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const typing = (e.target as HTMLElement).closest('input, textarea');
+      if (e.key === 'Escape' && !typing) onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  useEffect(() => {
+    ref.current?.scrollTo({ top: 0 });
+  }, [item.number]);
+
+  return (
+    <>
+      <div className="scrim" onClick={onClose} />
+      <aside className="panel" role="dialog" aria-label={`#${item.number} ${item.title}`} ref={ref}>
+        <header className="panel-head">
+          <div className="panel-crumbs">
+            <span>{project.name}</span>
+            <span className="muted">#{item.number}</span>
+          </div>
+          <span className="spacer" />
+          <button
+            className="icon-btn danger-hover"
+            title="Delete item"
+            onClick={() => {
+              if (confirm(`Delete #${item.number} "${item.title}"? This can't be undone.`)) {
+                run(actions.deleteItem(project.id, item.number)).then(onClose);
+              }
+            }}
+          >
+            <Icon name="trash" />
+          </button>
+          <button className="icon-btn" title="Close (Esc)" onClick={onClose}>
+            <Icon name="x" />
+          </button>
+        </header>
+
+        <EditableTitle key={`t${item.number}`} value={item.title} onSave={(title) => patch({ title })} />
+
+        <div className="panel-grid">
+          <div className="panel-main">
+            <AgentCard project={project} item={item} actors={actors} run={run} />
+            <Description key={`d${item.number}`} item={item} onSave={(body) => patch({ body })} />
+            <Timeline item={item} project={project} actors={actors} />
+            <Composer key={`c${item.number}`} item={item} project={project} run={run} />
+          </div>
+
+          <div className="panel-side">
+            <Field label="Status">
+              <Menu
+                trigger={<StatusPill status={project.statuses.find((s) => s.id === item.status)} />}
+                options={project.statuses.map((s) => ({ value: s.id, label: <StatusPill status={s} /> }))}
+                selected={item.status}
+                onSelect={(status) => patch({ status })}
+                className="field-menu"
+              />
+            </Field>
+            <Field label="Assignees">
+              <Menu
+                multi
+                title="Assign people or agents"
+                trigger={
+                  item.assignees.length ? (
+                    <span className="assignee-list">
+                      {item.assignees.map((id) => {
+                        const a = actors.find((x) => x.id === id);
+                        return (
+                          <span key={id} className="assignee">
+                            <Avatar actor={a} size={18} /> {a?.name ?? id}
+                          </span>
+                        );
+                      })}
+                    </span>
+                  ) : (
+                    <span className="muted">No one — assign yourself or an agent</span>
+                  )
+                }
+                options={actors.map((a) => ({
+                  value: a.id,
+                  label: (
+                    <span className="assignee">
+                      <Avatar actor={a} size={18} /> {a.name}
+                    </span>
+                  ),
+                  hint: a.kind === 'agent' ? 'agent' : undefined,
+                }))}
+                selected={item.assignees}
+                onSelect={(id) =>
+                  patch({
+                    assignees: item.assignees.includes(id)
+                      ? item.assignees.filter((x) => x !== id)
+                      : [...item.assignees, id],
+                  })
+                }
+                className="field-menu"
+              />
+            </Field>
+            <Field label="Priority">
+              <Menu
+                trigger={item.priority ? <PriorityChip priority={item.priority} /> : <span className="muted">None</span>}
+                options={[...PRIORITIES.map((p) => ({ value: p, label: <PriorityChip priority={p} /> })), { value: null, label: 'None' }]}
+                selected={item.priority}
+                onSelect={(priority) => patch({ priority })}
+                className="field-menu"
+              />
+            </Field>
+            <Field label="Size">
+              <Menu
+                trigger={item.size ? <span className="chip">{item.size}</span> : <span className="muted">None</span>}
+                options={[...SIZES.map((s) => ({ value: s, label: s })), { value: null, label: 'None' }]}
+                selected={item.size}
+                onSelect={(size) => patch({ size })}
+                className="field-menu"
+              />
+            </Field>
+            <Field label="Labels">
+              <LabelEditor key={`l${item.number}`} labels={item.labels} onSave={(labels) => patch({ labels })} />
+            </Field>
+            {(item.agent.branch || item.agent.prUrl || item.agent.sessionUrl) && (
+              <Field label="Development">
+                <div className="dev-links">
+                  {item.agent.branch && (
+                    <span className="dev-link">
+                      <Icon name="branch" size={14} /> <code>{item.agent.branch}</code>
+                    </span>
+                  )}
+                  {item.agent.prUrl && (
+                    <a className="dev-link" href={item.agent.prUrl} target="_blank" rel="noreferrer">
+                      <Icon name="pr" size={14} /> {shortUrl(item.agent.prUrl)}
+                    </a>
+                  )}
+                  {item.agent.sessionUrl && (
+                    <a className="dev-link" href={item.agent.sessionUrl} target="_blank" rel="noreferrer">
+                      <Icon name="link" size={14} /> Agent session
+                    </a>
+                  )}
+                </div>
+              </Field>
+            )}
+            <p className="side-foot muted">
+              Opened {timeAgo(item.createdAt)} · updated {timeAgo(item.updatedAt)}
+            </p>
+          </div>
+        </div>
+      </aside>
+    </>
+  );
+}
+
+function shortUrl(url: string) {
+  const m = /github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/.exec(url);
+  return m ? `${m[1]}#${m[2]}` : url.replace(/^https?:\/\//, '').slice(0, 40);
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="field">
+      <div className="field-label">{label}</div>
+      {children}
+    </div>
+  );
+}
+
+function EditableTitle({ value, onSave }: { value: string; onSave: (v: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+  if (!editing) {
+    return (
+      <h2 className="panel-title" onClick={() => setEditing(true)} title="Click to edit">
+        {value}
+      </h2>
+    );
+  }
+  const save = () => {
+    setEditing(false);
+    if (draft.trim() && draft !== value) onSave(draft.trim());
+    else setDraft(value);
+  };
+  return (
+    <input
+      className="input panel-title-input"
+      autoFocus
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={save}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') save();
+        if (e.key === 'Escape') (setDraft(value), setEditing(false));
+      }}
+    />
+  );
+}
+
+/** The human ↔ agent handoff: what the agent is doing and what you can do about it. */
+function AgentCard({ project, item, actors, run }: { project: Project; item: Item; actors: Actor[]; run: Run }) {
+  const [reply, setReply] = useState('');
+  const agents = actors.filter((a) => a.kind === 'agent');
+  const assignedAgent = actors.find((a) => a.kind === 'agent' && item.assignees.includes(a.id));
+  const agent = assignedAgent ?? actors.find((a) => a.id === item.agent.by);
+  const state = item.agent.state;
+  const setAgent = (p: object) => run(actions.setAgent(project.id, item.number, p));
+
+  if (!agent && state === 'idle') {
+    if (!agents.length) return null;
+    return (
+      <div className="agent-card agent-card-empty">
+        <Icon name="sparkle" />
+        <span>Hand this to an agent. It'll be queued and picked up through the board's MCP server.</span>
+        <span className="spacer" />
+        {agents.map((a) => (
+          <button
+            key={a.id}
+            className="btn btn-sm"
+            onClick={() => run(actions.updateItem(project.id, item.number, { assignees: [...item.assignees, a.id] }))}
+          >
+            Assign {a.name}
+          </button>
+        ))}
+      </div>
+    );
+  }
+
+  const lastNote = [...item.activity].reverse().find((a) => a.actor === agent?.id && a.text && a.kind !== 'comment');
+  const meta = AGENT_META[state];
+
+  async function replyAnd(state: string) {
+    if (reply.trim()) await run(actions.comment(project.id, item.number, reply.trim()));
+    await setAgent({ state, note: undefined });
+    setReply('');
+  }
+
+  return (
+    <div className={`agent-card agent-card-${state}`} style={{ ['--tone' as string]: `var(--c-${meta.tone})` }}>
+      <div className="agent-card-head">
+        <Avatar actor={agent} size={24} />
+        <div>
+          <div className="agent-card-title">
+            {agent?.name ?? 'Agent'} <AgentBadge state={state} />
+          </div>
+          <div className="muted small">
+            {state === 'queued' && 'Waiting to be picked up'}
+            {state === 'running' && `Working · last update ${timeAgo(item.agent.updatedAt)}`}
+            {state === 'blocked' && 'Needs your input to continue'}
+            {state === 'needs_review' && 'Finished — waiting for your review'}
+            {state === 'done' && `Finished ${timeAgo(item.agent.updatedAt)}`}
+            {state === 'idle' && 'Not working on this'}
+            {item.agent.model && ` · ${item.agent.model}`}
+          </div>
+        </div>
+        <span className="spacer" />
+        {(state === 'running' || state === 'queued') && (
+          <button className="btn btn-sm" onClick={() => setAgent({ state: 'idle', note: 'Stopped by you' })}>
+            <Icon name="stop" size={12} /> Stop
+          </button>
+        )}
+        {(state === 'idle' || state === 'done') && (
+          <button className="btn btn-sm" onClick={() => setAgent({ state: 'queued' })}>
+            <Icon name="play" size={12} /> Queue again
+          </button>
+        )}
+      </div>
+
+      {lastNote && state !== 'idle' && (
+        <div className="agent-note">
+          <Markdown text={lastNote.text} />
+        </div>
+      )}
+
+      {(state === 'blocked' || state === 'needs_review') && (
+        <div className="agent-reply">
+          <textarea
+            className="input"
+            rows={2}
+            placeholder={state === 'blocked' ? `Answer ${agent?.name ?? 'the agent'}…` : 'Feedback for changes (optional when approving)…'}
+            value={reply}
+            onChange={(e) => setReply(e.target.value)}
+          />
+          <div className="row gap-sm">
+            {state === 'blocked' ? (
+              <button className="btn btn-primary btn-sm" disabled={!reply.trim()} onClick={() => replyAnd('queued')}>
+                Reply and unblock
+              </button>
+            ) : (
+              <>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={async () => {
+                    if (reply.trim()) await run(actions.comment(project.id, item.number, reply.trim()));
+                    await setAgent({ state: 'done' });
+                    const done = project.statuses.find((s) => s.id === 'done') ?? project.statuses.at(-1)!;
+                    await run(actions.updateItem(project.id, item.number, { status: done.id }));
+                    setReply('');
+                  }}
+                >
+                  <Icon name="check" size={12} /> Approve and close
+                </button>
+                <button className="btn btn-sm" disabled={!reply.trim()} onClick={() => replyAnd('queued')}>
+                  Request changes
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Description({ item, onSave }: { item: Item; onSave: (body: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [tab, setTab] = useState<'write' | 'preview'>('write');
+  const [draft, setDraft] = useState(item.body);
+
+  if (!editing) {
+    return (
+      <section className="box">
+        <div className="box-head">
+          <span className="box-title">Description</span>
+          <span className="spacer" />
+          <button className="icon-btn" title="Edit description" onClick={() => (setDraft(item.body), setTab('write'), setEditing(true))}>
+            <Icon name="pencil" size={14} />
+          </button>
+        </div>
+        <div className="box-body">
+          <Markdown text={item.body} />
+        </div>
+      </section>
+    );
+  }
+  return (
+    <section className="box box-editing">
+      <div className="box-head tabs-sm">
+        <button className={tab === 'write' ? 'on' : ''} onClick={() => setTab('write')}>Write</button>
+        <button className={tab === 'preview' ? 'on' : ''} onClick={() => setTab('preview')}>Preview</button>
+        <span className="spacer" />
+        <span className="muted small">Markdown, Mermaid and images supported</span>
+      </div>
+      <div className="box-body">
+        {tab === 'write' ? (
+          <textarea
+            className="input editor"
+            autoFocus
+            rows={14}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) (onSave(draft), setEditing(false));
+            }}
+          />
+        ) : (
+          <Markdown text={draft} empty="Nothing to preview." />
+        )}
+        <div className="row gap-sm end">
+          <button className="btn btn-sm" onClick={() => setEditing(false)}>Cancel</button>
+          <button className="btn btn-primary btn-sm" onClick={() => (onSave(draft), setEditing(false))}>Save</button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function Timeline({ item, project, actors }: { item: Item; project: Project; actors: Actor[] }) {
+  const name = (id: string) => actors.find((a) => a.id === id)?.name ?? id;
+  const status = (id: string) => project.statuses.find((s) => s.id === id);
+
+  function describe(ev: Activity): React.ReactNode {
+    const m = ev.meta ?? {};
+    switch (ev.kind) {
+      case 'created':
+        return 'created this item';
+      case 'status':
+        return (
+          <>
+            moved this from <StatusPill status={status(m.from)} /> to <StatusPill status={status(m.to)} />
+          </>
+        );
+      case 'assigned': {
+        const parts = [];
+        if (m.added?.length) parts.push(`assigned ${m.added.map(name).join(', ')}`);
+        if (m.removed?.length) parts.push(`unassigned ${m.removed.map(name).join(', ')}`);
+        return parts.join(' and ');
+      }
+      case 'renamed':
+        return (
+          <>
+            renamed this from <s>{m.from}</s>
+          </>
+        );
+      case 'edited':
+        return `edited ${(m.fields ?? []).join(', ')}`;
+      case 'agent':
+        return (
+          <>
+            {m.to === 'running' ? 'started working' : 'set agent state to'} {m.to !== 'running' && <AgentBadge state={m.to} />}
+          </>
+        );
+      case 'link':
+        return (
+          <>
+            linked{' '}
+            {Object.entries(m).map(([k, v]) =>
+              k === 'branch' ? (
+                <code key={k}>{String(v)}</code>
+              ) : (
+                <a key={k} href={String(v)} target="_blank" rel="noreferrer">
+                  {k === 'prUrl' ? shortUrl(String(v)) : 'a session'}
+                </a>
+              ),
+            )}
+          </>
+        );
+      case 'log':
+        return 'posted an update';
+      default:
+        return ev.kind;
+    }
+  }
+
+  const events = item.activity;
+  return (
+    <section className="timeline" aria-label="Activity">
+      <h3 className="section-title">Activity</h3>
+      {events.map((ev) => {
+        const actor = actors.find((a) => a.id === ev.actor);
+        const isAgent = actor?.kind === 'agent';
+        if (ev.kind === 'comment' || ((ev.kind === 'log' || ev.kind === 'agent') && ev.text)) {
+          return (
+            <div key={ev.id} className={`tl-comment ${isAgent ? 'tl-agent' : ''}`}>
+              <Avatar actor={actor} size={28} />
+              <div className="box">
+                <div className="box-head">
+                  <strong>{name(ev.actor)}</strong>
+                  {isAgent && <span className="chip chip-agent">agent</span>}
+                  {ev.kind !== 'comment' && <span className="muted small">{describe(ev)}</span>}
+                  <span className="muted small" title={new Date(ev.at).toLocaleString()}>
+                    {timeAgo(ev.at)}
+                  </span>
+                </div>
+                <div className="box-body">
+                  <Markdown text={ev.text} />
+                </div>
+              </div>
+            </div>
+          );
+        }
+        return (
+          <div key={ev.id} className="tl-event">
+            <span className="tl-dot">
+              <Avatar actor={actor} size={18} />
+            </span>
+            <span>
+              <strong>{name(ev.actor)}</strong> {describe(ev)}{' '}
+              <span className="muted" title={new Date(ev.at).toLocaleString()}>
+                {timeAgo(ev.at)}
+              </span>
+            </span>
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
+function Composer({ item, project, run }: { item: Item; project: Project; run: Run }) {
+  const [text, setText] = useState('');
+  const submit = async () => {
+    if (!text.trim()) return;
+    await run(actions.comment(project.id, item.number, text.trim()));
+    setText('');
+  };
+  return (
+    <div className="composer">
+      <textarea
+        className="input"
+        rows={3}
+        placeholder="Leave a comment (Markdown). ⌘↵ to send"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => e.key === 'Enter' && (e.metaKey || e.ctrlKey) && submit()}
+      />
+      <div className="row end">
+        <button className="btn btn-primary btn-sm" disabled={!text.trim()} onClick={submit}>
+          Comment
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function LabelEditor({ labels, onSave }: { labels: string[]; onSave: (l: string[]) => void }) {
+  const [draft, setDraft] = useState('');
+  const add = () => {
+    const l = draft.trim().toLowerCase();
+    if (l && !labels.includes(l)) onSave([...labels, l]);
+    setDraft('');
+  };
+  return (
+    <div className="label-editor">
+      {labels.map((l) => (
+        <span key={l} className="label-removable">
+          <Label name={l} />
+          <button className="icon-btn tiny" title={`Remove ${l}`} onClick={() => onSave(labels.filter((x) => x !== l))}>
+            <Icon name="x" size={10} />
+          </button>
+        </span>
+      ))}
+      <input
+        className="input input-bare"
+        placeholder="Add label…"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ',') (e.preventDefault(), add());
+        }}
+        onBlur={add}
+      />
+    </div>
+  );
+}
