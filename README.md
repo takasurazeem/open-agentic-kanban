@@ -77,6 +77,13 @@ claude mcp add kanban -e KANBAN_URL=http://localhost:5173 -e KANBAN_AGENT=claude
 `KANBAN_AGENT` is the actor the agent acts as. Add more agents with
 `POST /api/actors {"name": "Reviewer bot", "kind": "agent"}`.
 
+### Coordinating several agents
+
+[agent-coordinator](https://github.com/takasurazeem/agent-coordinator) is a Claude Code plugin
+with two skills: `coordinator` (background agents) and `session-coordinator` (sessions you can
+watch and steer). When this board is connected, Claude takes work from the queue, hands each piece
+to an agent picked for it, and posts progress to the items. You still approve the results.
+
 ## How the handoff works
 
 ```mermaid
