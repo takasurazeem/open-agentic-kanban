@@ -61,6 +61,8 @@ export interface Project {
   name: string;
   description: string;
   visibility: 'public' | 'private';
+  /** Linked code repos, e.g. "owner/name"; agents use these to find the project. */
+  repos?: string[];
   statuses: Status[];
   items: Item[];
   createdAt: string;

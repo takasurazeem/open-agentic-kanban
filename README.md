@@ -67,12 +67,17 @@ Claude gets these tools:
 | `claim_item` | Start work: assigns the agent, state → running, Todo → In progress |
 | `report_progress` | Post an update; set state `running` / `blocked` / `needs_review` / `idle`; link a branch, PR or session |
 | `comment`, `update_item`, `create_item` | Talk, edit fields, split out follow-ups |
+| `find_project`, `create_project`, `link_repo` | Find the project for the current repo, or set one up |
 
-To use it from another project, add the server with an absolute path:
+To use it from every repo, add the server once for your user, with an absolute path:
 
 ```bash
-claude mcp add kanban -e KANBAN_URL=http://localhost:5173 -e KANBAN_AGENT=claude -- node /path/to/open-agentic-kanbaan/server/mcp.mjs
+claude mcp add --scope user kanban -e KANBAN_URL=http://localhost:5173 -e KANBAN_AGENT=claude -- node /path/to/open-agentic-kanban/server/mcp.mjs
 ```
+
+Link each project to its code repos (in **Project settings → Linked repos**, or with `link_repo`).
+An agent in a repo then finds its project with `find_project`, passing the git remote or folder
+name, and works that project's queue.
 
 `KANBAN_AGENT` is the actor the agent acts as. Add more agents with
 `POST /api/actors {"name": "Reviewer bot", "kind": "agent"}`.

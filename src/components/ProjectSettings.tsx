@@ -19,6 +19,7 @@ export function ProjectSettings({
   const [description, setDescription] = useState(project.description);
   const [visibility, setVisibility] = useState(project.visibility);
   const [statuses, setStatuses] = useState<Status[]>(project.statuses);
+  const [repos, setRepos] = useState((project.repos ?? []).join(', '));
 
   const update = (i: number, p: Partial<Status>) => setStatuses((s) => s.map((x, j) => (j === i ? { ...x, ...p } : x)));
   const move = (i: number, d: number) =>
@@ -51,6 +52,17 @@ export function ProjectSettings({
               placeholder="What is this project about?"
               onChange={(e) => setDescription(e.target.value)}
             />
+          </label>
+          <label className="form-row">
+            <span>Linked repos</span>
+            <input
+              className="input"
+              value={repos}
+              placeholder="owner/name, another-repo"
+              spellCheck={false}
+              onChange={(e) => setRepos(e.target.value)}
+            />
+            <span className="muted small">Agents working in these repos pick up this project automatically.</span>
           </label>
           <div className="form-row">
             <span>Visibility</span>
@@ -124,7 +136,13 @@ export function ProjectSettings({
           <button
             className="btn btn-primary btn-sm"
             onClick={async () => {
-              await onSave({ name, description, visibility, statuses: statuses.filter((s) => s.name.trim()) });
+              await onSave({
+                name,
+                description,
+                visibility,
+                repos: repos.split(',').map((r) => r.trim()).filter(Boolean),
+                statuses: statuses.filter((s) => s.name.trim()),
+              });
               onClose();
             }}
           >

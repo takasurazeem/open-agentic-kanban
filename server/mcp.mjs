@@ -6,7 +6,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { AGENT_STATES, PRIORITIES, SIZES } from './model.mjs';
+import { AGENT_STATES, PRIORITIES, SIZES, repoMatches } from './model.mjs';
 
 const BASE = (process.env.KANBAN_URL ?? 'http://localhost:5173').replace(/\/$/, '');
 const AGENT = process.env.KANBAN_AGENT ?? 'claude';
@@ -54,6 +54,58 @@ server.registerTool(
   'list_projects',
   { description: 'List projects with their statuses and item counts per status.', inputSchema: {} },
   tool(() => api('GET', '/projects')),
+);
+
+server.registerTool(
+  'find_project',
+  {
+    description:
+      'Find the board project linked to a code repo. Pass the repo\'s git remote URL, its "owner/name", or its folder name ' +
+      '(try the remote first). Returns the matching projects, or none: then ask the user whether to create one with create_project.',
+    inputSchema: { repo: z.string().describe('git remote URL, owner/name, or folder name') },
+  },
+  tool(async ({ repo }) => {
+    const all = await api('GET', '/projects');
+    const hits = all.filter((p) => repoMatches(p.repos, repo));
+    return hits.length ? hits : `No project is linked to "${repo}".`;
+  }),
+);
+
+server.registerTool(
+  'create_project',
+  {
+    description: 'Create a board project, optionally linked to code repos so agents in those repos find it with find_project.',
+    inputSchema: {
+      name: z.string(),
+      description: z.string().optional(),
+      repos: z.array(z.string()).optional().describe('git remote URLs, owner/name, or folder names'),
+    },
+  },
+  tool(async (body) => {
+    const p = await api('POST', '/projects', body);
+    return `Created project "${p.id}"${p.repos?.length ? ` linked to ${p.repos.join(', ')}` : ''}.`;
+  }),
+);
+
+server.registerTool(
+  'link_repo',
+  {
+    description: 'Link (or unlink) a code repo to an existing project, so find_project matches it.',
+    inputSchema: {
+      project: z.string(),
+      repo: z.string().describe('git remote URL, owner/name, or folder name'),
+      unlink: z.boolean().optional(),
+    },
+  },
+  tool(async ({ project, repo, unlink }) => {
+    const all = await api('GET', '/projects');
+    const p = all.find((x) => x.id === project);
+    if (!p) throw new Error(`No project "${project}"`);
+    const cur = p.repos ?? [];
+    const next = unlink ? cur.filter((r) => !repoMatches([r], repo)) : [...cur, repo];
+    const res = await api('PATCH', `/projects/${encodeURIComponent(project)}`, { repos: next });
+    return `${project} repos: ${(res.repos ?? []).join(', ') || 'none'}`;
+  }),
 );
 
 server.registerTool(

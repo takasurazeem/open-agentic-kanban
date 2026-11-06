@@ -5,7 +5,7 @@ import {
   findProject, findItem, findActor, pushActivity, nextItemNumber, getProblems,
 } from './store.mjs';
 import * as gitsync from './gitsync.mjs';
-import { AGENT_STATES, PRIORITIES, SIZES, DEFAULT_STATUSES, STATUS_COLORS } from './model.mjs';
+import { AGENT_STATES, PRIORITIES, SIZES, DEFAULT_STATUSES, STATUS_COLORS, normRepos } from './model.mjs';
 import { fromLegacyProject } from './seed.mjs';
 
 const PRIORITY_RANK = { Urgent: 0, High: 1, Medium: 2, Low: 3 };
@@ -189,6 +189,7 @@ route('POST', '/api/projects', ({ body }) =>
     const p = {
       id, name: body.name.trim(), description: body.description ?? '',
       visibility: body.visibility === 'public' ? 'public' : 'private',
+      repos: normRepos(body.repos),
       statuses: structuredClone(DEFAULT_STATUSES), createdAt: now(), items: [],
     };
     s.projects.push(p);
@@ -202,6 +203,7 @@ route('PATCH', '/api/projects/:pid', ({ params, body }) =>
     if (body.name?.trim()) p.name = body.name.trim();
     if (body.description != null) p.description = body.description;
     if (body.visibility) p.visibility = body.visibility === 'public' ? 'public' : 'private';
+    if (Array.isArray(body.repos)) p.repos = normRepos(body.repos);
     if (Array.isArray(body.statuses)) {
       if (!body.statuses.length) throw new HttpError(400, 'A project needs at least one status');
       const ids = new Set();
