@@ -75,6 +75,18 @@ To use it from every repo, add the server once for your user, with an absolute p
 claude mcp add --scope user kanban -e KANBAN_URL=http://localhost:5173 -e KANBAN_AGENT=claude -- node /path/to/open-agentic-kanban/server/mcp.mjs
 ```
 
+The server also takes `--url=<board URL>` and `--agent=<actor id>` arguments, for harnesses that
+only pass plain arguments. For example, Muse Code (`~/.config/muse/settings.json`):
+
+```json
+"mcpServers": {
+  "kanban": { "command": "node", "args": ["/path/to/open-agentic-kanban/server/mcp.mjs", "--agent=muse"] }
+}
+```
+
+Each agent should have its own actor (`POST /api/actors {"name": "Muse", "kind": "agent"}`) so the
+timeline shows who did what.
+
 Link each project to its code repos (in **Project settings → Linked repos**, or with `link_repo`).
 An agent in a repo then finds its project with `find_project`, passing the git remote or folder
 name, and works that project's queue.

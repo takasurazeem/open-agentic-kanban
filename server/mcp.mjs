@@ -8,8 +8,11 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { AGENT_STATES, PRIORITIES, SIZES, repoMatches } from './model.mjs';
 
-const BASE = (process.env.KANBAN_URL ?? 'http://localhost:5173').replace(/\/$/, '');
-const AGENT = process.env.KANBAN_AGENT ?? 'claude';
+// Settings come from --url= / --agent= arguments or KANBAN_URL / KANBAN_AGENT (arguments win), so
+// harnesses that only allow plain args (or treat env values as secrets) can configure it too.
+const arg = (name) => process.argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
+const BASE = (arg('url') ?? process.env.KANBAN_URL ?? 'http://localhost:5173').replace(/\/$/, '');
+const AGENT = arg('agent') ?? process.env.KANBAN_AGENT ?? 'claude';
 
 async function api(method, path, body) {
   let res;
