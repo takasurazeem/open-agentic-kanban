@@ -13,7 +13,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import { seed } from './seed.mjs';
-import { DEFAULT_STATUSES } from './model.mjs';
+import { DEFAULT_STATUSES, normRepos } from './model.mjs';
 import * as gitsync from './gitsync.mjs';
 import { appendLines } from './fsutil.mjs';
 
@@ -66,6 +66,7 @@ function normalizeProject(raw, id) {
     name: str(r.name, id),
     description: str(r.description),
     visibility: r.visibility === 'public' ? 'public' : 'private',
+    repos: normRepos(r.repos),
     statuses: Array.isArray(r.statuses) && r.statuses.length ? r.statuses : structuredClone(DEFAULT_STATUSES),
     createdAt: str(r.createdAt, new Date().toISOString()),
     items: [],
