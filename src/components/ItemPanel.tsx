@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { actions } from '../api';
 import { PRIORITIES, SIZES, type Activity, type Actor, type Attachment, type Item, type Project } from '../types';
 import { AGENT_META, AgentBadge, Avatar, Label, PriorityChip, StatusPill, timeAgo } from './bits';
+import { CsvTable } from './Csv';
 import { Icon } from './Icon';
 import { Markdown } from './Markdown';
 import { Menu } from './Menu';
@@ -560,13 +562,13 @@ function LabelEditor({ labels, onSave }: { labels: string[]; onSave: (l: string[
   );
 }
 
-type PreviewKind = 'image' | 'video' | 'audio' | 'pdf' | 'text' | null;
+type PreviewKind = 'image' | 'video' | 'audio' | 'pdf' | 'text' | 'markdown' | 'csv' | null;
 const PREVIEW_EXT: Record<string, PreviewKind> = {
   png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', svg: 'image',
   mp4: 'video', webm: 'video', mov: 'video',
   mp3: 'audio', wav: 'audio', m4a: 'audio',
   pdf: 'pdf',
-  txt: 'text', md: 'text', log: 'text', json: 'text', csv: 'text',
+  txt: 'text', md: 'markdown', markdown: 'markdown', log: 'text', json: 'text', csv: 'csv', tsv: 'csv',
 };
 const previewKind = (name: string): PreviewKind => PREVIEW_EXT[name.split('.').pop()?.toLowerCase() ?? ''] ?? null;
 const MAX_TEXT_PREVIEW = 200_000;
@@ -638,18 +640,88 @@ function AttachmentRow({ file, item, project, run }: { file: Attachment; item: I
   const url = actions.attachmentUrl(project.id, item.number, file.name);
   const [open, setOpen] = useState(kind === 'image'); // images show right away; the rest open on demand
   const [text, setText] = useState<string | null>(null);
+  const [view, setView] = useState<'rich' | 'source'>('rich'); // Markdown files: rendered or raw
+  const [full, setFull] = useState(false); // preview open in a large modal
 
   useEffect(() => {
-    if (!open || kind !== 'text' || text !== null) return;
+    if (!full) return;
+    // Esc closes the expanded preview first, without also closing the card panel behind it.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      setFull(false);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [full]);
+
+  useEffect(() => {
+    if (!open || (kind !== 'text' && kind !== 'csv' && kind !== 'markdown') || text !== null) return;
     let cancelled = false;
     fetch(url, { headers: { Range: `bytes=0-${MAX_TEXT_PREVIEW - 1}` } })
       .then((r) => r.text())
-      .then((t) => !cancelled && setText(file.size > MAX_TEXT_PREVIEW ? `${t.slice(0, MAX_TEXT_PREVIEW)}\n… (truncated, download for the full file)` : t))
+      .then((t) => {
+        if (cancelled) return;
+        if (file.size <= MAX_TEXT_PREVIEW) return setText(t);
+        const cut = t.slice(0, MAX_TEXT_PREVIEW);
+        // For a table, drop the row that was cut in half; for text, say it was cut.
+        setText(kind === 'csv' ? cut.slice(0, Math.max(0, cut.lastIndexOf('\n'))) : `${cut}\n… (truncated, download for the full file)`);
+      })
       .catch(() => !cancelled && setText('Could not load a preview.'));
     return () => {
       cancelled = true;
     };
   }, [open, kind, text, url, file.size]);
+
+  const preview = kind && (
+    <div className={`attachment-preview ${full ? 'preview-full' : ''}`} role={full ? 'dialog' : undefined} aria-label={full ? file.name : undefined}>
+      {full && (
+        <div className="preview-full-head">
+          <strong>{file.name}</strong>
+          <span className="muted small">{formatSize(file.size)} · Esc to close</span>
+        </div>
+      )}
+      <button
+        className="icon-btn preview-full-btn"
+        title={full ? 'Close (Esc)' : 'Expand'}
+        aria-label={full ? 'Close expanded preview' : 'Expand preview'}
+        onClick={() => setFull((f) => !f)}
+      >
+        <Icon name={full ? 'x' : 'expand'} size={14} />
+      </button>
+      {kind === 'image' && (
+        <a href={url} target="_blank" rel="noreferrer">
+          <img src={url} alt={file.name} loading="lazy" />
+        </a>
+      )}
+      {kind === 'video' && <video src={url} controls preload="metadata" />}
+      {kind === 'audio' && <audio src={url} controls preload="metadata" />}
+      {kind === 'pdf' && <iframe src={url} title={file.name} />}
+      {kind === 'text' && <pre>{text ?? 'Loading…'}</pre>}
+      {kind === 'markdown' && (
+        <>
+          <div className="preview-tabs" role="tablist" aria-label="Markdown view">
+            {(['rich', 'source'] as const).map((v) => (
+              <button key={v} role="tab" aria-selected={view === v} className={`chip-btn ${view === v ? 'on' : ''}`} onClick={() => setView(v)}>
+                {v === 'rich' ? 'Rich preview' : 'Source'}
+              </button>
+            ))}
+          </div>
+          {text === null ? (
+            <pre>Loading…</pre>
+          ) : view === 'rich' ? (
+            <div className="md-rich">
+              <Markdown text={text} empty="This file is empty." baseUrl={actions.attachmentUrl(project.id, item.number, '')} />
+            </div>
+          ) : (
+            <pre>{text}</pre>
+          )}
+        </>
+      )}
+      {kind === 'csv' &&
+        (text === null ? <pre>Loading…</pre> : <CsvTable text={text} delimiter={file.name.toLowerCase().endsWith('.tsv') ? '\t' : ','} />)}
+    </div>
+  );
 
   const isImage = kind === 'image';
   const markdown = `${isImage ? '!' : ''}[${file.name}](${url})`;
@@ -685,19 +757,7 @@ function AttachmentRow({ file, item, project, run }: { file: Attachment; item: I
           <Icon name="trash" size={14} />
         </button>
       </div>
-      {open && kind && (
-        <div className="attachment-preview">
-          {kind === 'image' && (
-            <a href={url} target="_blank" rel="noreferrer">
-              <img src={url} alt={file.name} loading="lazy" />
-            </a>
-          )}
-          {kind === 'video' && <video src={url} controls preload="metadata" />}
-          {kind === 'audio' && <audio src={url} controls preload="metadata" />}
-          {kind === 'pdf' && <iframe src={url} title={file.name} />}
-          {kind === 'text' && <pre>{text ?? 'Loading…'}</pre>}
-        </div>
-      )}
+      {open && kind && (full ? createPortal(<div className="preview-backdrop" onMouseDown={(e) => e.target === e.currentTarget && setFull(false)}>{preview}</div>, document.body) : preview)}
     </li>
   );
 }

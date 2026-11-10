@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
+import { CsvTable } from './Csv';
 
 let mermaidCounter = 0;
 
@@ -33,17 +34,34 @@ function Mermaid({ code }: { code: string }) {
   return <div className="mermaid" dangerouslySetInnerHTML={{ __html: svg }} />;
 }
 
-export function Markdown({ text, empty = 'No description provided.' }: { text: string; empty?: string }) {
+/**
+ * `baseUrl`: where relative links and images resolve to (e.g. a card's attachments folder), so a Markdown
+ * file attached to a card can show a sibling attachment with `![](diagram.png)`.
+ */
+export function Markdown({ text, empty = 'No description provided.', baseUrl }: { text: string; empty?: string; baseUrl?: string }) {
   if (!text.trim()) return <p className="muted md-empty">{empty}</p>;
+  const urlTransform = (url: string) => {
+    if (baseUrl && !/^([a-z][a-z0-9+.-]*:|\/|#|\?)/i.test(url)) {
+      const rel = url.replace(/^\.\//, '');
+      try {
+        return baseUrl + encodeURIComponent(decodeURIComponent(rel));
+      } catch {
+        return baseUrl + encodeURIComponent(rel);
+      }
+    }
+    return defaultUrlTransform(url);
+  };
   return (
     <div className="md">
       <ReactMarkdown
+        urlTransform={urlTransform}
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
         components={{
           code({ className, children, ...props }) {
             const lang = /language-(\w+)/.exec(className ?? '')?.[1];
             if (lang === 'mermaid') return <Mermaid code={String(children).replace(/\n$/, '')} />;
+            if (lang === 'csv' || lang === 'tsv') return <CsvTable text={String(children).replace(/\n$/, '')} delimiter={lang === 'tsv' ? '\t' : undefined} />;
             return (
               <code className={className} {...props}>
                 {children}
@@ -51,9 +69,9 @@ export function Markdown({ text, empty = 'No description provided.' }: { text: s
             );
           },
           pre({ children }) {
-            // Mermaid diagrams render their own container; don't wrap them in <pre>.
+            // Mermaid diagrams and CSV tables render their own container; don't wrap them in <pre>.
             const child = Array.isArray(children) ? children[0] : children;
-            if ((child as any)?.props?.className?.includes('language-mermaid')) return <>{children}</>;
+            if (/language-(mermaid|csv|tsv)\b/.test((child as any)?.props?.className ?? '')) return <>{children}</>;
             return <pre>{children}</pre>;
           },
           a: ({ children, href }) => (

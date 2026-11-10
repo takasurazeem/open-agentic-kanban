@@ -211,7 +211,7 @@ textarea.input { resize: vertical; line-height: 1.5; }
   display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; color: #fff;
   background: linear-gradient(135deg, #d97757, #8250df);
 }
-.nav-toggle { display: none; }
+.nav-toggle { display: inline-grid; }
 .conn { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-muted); }
 .conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c-gray); }
 .conn-live .conn-dot { background: var(--c-green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-green) 25%, transparent); }
@@ -224,6 +224,7 @@ textarea.input { resize: vertical; line-height: 1.5; }
 /* ---------- Sidebar ---------- */
 .sidebar {
   width: var(--sidebar-w); flex: none; overflow-y: auto; padding: 12px 8px 16px;
+  transition: width 0.18s, padding 0.18s, border-width 0.18s, visibility 0s;
   border-right: 1px solid var(--border-muted); display: flex; flex-direction: column; gap: 16px; background: var(--bg);
 }
 .side-section { display: flex; flex-direction: column; gap: 2px; }
@@ -497,8 +498,14 @@ a.dev-link { color: var(--accent); }
   .panel-side { order: -1; display: grid; grid-template-columns: 1fr 1fr; column-gap: 16px; }
   .panel-side .field:first-child { padding-top: 12px; }
 }
+@media (min-width: 761px) {
+  .side-collapsed .sidebar {
+    width: 0; padding-inline: 0; border-right-width: 0; overflow: hidden; visibility: hidden;
+    transition: width 0.18s, padding 0.18s, border-width 0.18s, visibility 0s 0.18s;
+  }
+}
+@media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }
 @media (max-width: 760px) {
-  .nav-toggle { display: inline-grid; }
   .sidebar {
     position: fixed; top: var(--topbar-h); bottom: 0; left: 0; z-index: 30; transform: translateX(-100%);
     transition: transform 0.18s; box-shadow: var(--shadow-lg);
@@ -541,3 +548,35 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 /* New project form */
 .new-project { display: flex; flex-direction: column; gap: 6px; padding: 4px 0 8px; }
 .new-project p { margin: 0; }
+
+/* CSV tables (attachment previews and ```csv blocks) */
+.csv { margin: 8px 0; }
+.csv-wrap { max-height: 360px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+.csv table { border-collapse: collapse; width: max-content; min-width: 100%; font-size: 12px; }
+.csv th, .csv td { padding: 5px 10px; border-bottom: 1px solid var(--border-muted); text-align: left; white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.csv th { position: sticky; top: 0; background: var(--bg-subtle); font-weight: 600; border-bottom: 1px solid var(--border); }
+.csv tbody tr:nth-child(even) td { background: color-mix(in srgb, var(--bg-subtle) 55%, transparent); }
+.csv .num { text-align: right; font-variant-numeric: tabular-nums; }
+.csv-note { margin: 4px 2px 0; }
+
+/* Markdown attachment preview: rich / source switch */
+.preview-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+.md-rich { max-height: 480px; overflow: auto; padding: 12px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
+
+/* Expanded attachment preview: a large modal over the card panel */
+.attachment-preview { position: relative; }
+.preview-full-btn { position: absolute; top: 6px; right: 20px; z-index: 2; background: color-mix(in srgb, var(--bg) 80%, transparent); border: 1px solid var(--border); }
+.preview-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 4vh 4vw; background: rgba(1, 4, 9, 0.55); animation: fade 0.12s; }
+.preview-full {
+  width: min(1100px, 100%); max-height: 100%; overflow: auto; padding: 0 20px 20px; display: flex; flex-direction: column;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
+}
+.preview-full-head { display: flex; align-items: baseline; gap: 12px; padding: 14px 44px 12px 0; flex: none; }
+.preview-full .preview-full-btn { top: 10px; right: 14px; }
+.preview-full img, .preview-full video { max-width: 100%; max-height: calc(92vh - 120px); margin: auto; }
+.preview-full audio { margin: auto; max-width: 640px; }
+.preview-full iframe { flex: 1; width: 100%; height: calc(92vh - 120px); }
+.preview-full .md-rich { max-height: none; border: 0; padding: 0; width: min(100%, 860px); margin: 0 auto; }
+.preview-full .csv-wrap { max-height: calc(92vh - 140px); }
+.preview-full pre { max-height: none; flex: 1; }
+.preview-full .preview-tabs { justify-content: center; }

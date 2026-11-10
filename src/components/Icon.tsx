@@ -32,6 +32,8 @@ const paths: Record<string, string> = {
   chevronL: 'M10 4L6 8l4 4',
   chevronR: 'M6 4l4 4-4 4',
   pin: 'M9.5 2.5l4 4M8.2 3.8l4 4-1.7 1.7L6.5 5.5zM6.8 9.2L3 13',
+  expand: 'M2.5 6V2.5H6M10 2.5h3.5V6M13.5 10v3.5H10M6 13.5H2.5V10',
+  shrink: 'M6 2.5V6H2.5M10 2.5V6h3.5M10 13.5V10h3.5M6 13.5V10H2.5',
   menu: 'M2.5 4h11M2.5 8h11M2.5 12h11',
 };
 

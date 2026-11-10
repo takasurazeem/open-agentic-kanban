@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { actions, useBoard } from './api';
 import { filterItems, hasTerm, toggleTerm } from './query';
 import type { Item } from './types';
@@ -80,6 +80,27 @@ export default function App() {
   const [theme, setTheme] = useTheme();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
+  // Wide screens: the sidebar collapses to give the board the full width (remembered in this browser).
+  const [sideCollapsed, setSideCollapsed] = useState(() => storage.get('sidebarCollapsed') === '1');
+  const toggleSidebar = () => {
+    if (window.matchMedia('(max-width: 760px)').matches) return setNavOpen((o) => !o);
+    setSideCollapsed((c) => {
+      storage.set('sidebarCollapsed', c ? '0' : '1');
+      return !c;
+    });
+  };
+  const toggleRef = useRef(toggleSidebar);
+  toggleRef.current = toggleSidebar;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        toggleRef.current();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   useEffect(() => {
     const on = () => setRoute(parseHash());
@@ -143,9 +164,15 @@ export default function App() {
   const themeNext: Record<Theme, Theme> = { system: 'light', light: 'dark', dark: 'system' };
 
   return (
-    <div className={`app ${navOpen ? 'nav-open' : ''}`}>
+    <div className={`app ${navOpen ? 'nav-open' : ''} ${sideCollapsed ? 'side-collapsed' : ''}`}>
       <header className="topbar">
-        <button className="icon-btn nav-toggle" onClick={() => setNavOpen((o) => !o)} title="Projects">
+        <button
+          className="icon-btn nav-toggle"
+          onClick={toggleSidebar}
+          title={sideCollapsed ? 'Show sidebar (⌘B)' : 'Hide sidebar (⌘B)'}
+          aria-label={sideCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+          aria-expanded={!sideCollapsed}
+        >
           <Icon name="menu" />
         </button>
         <a className="brand" href="#/">
