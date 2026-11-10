@@ -20,16 +20,16 @@ There is no central board store. **Every project keeps its cards in its own code
 
 ```
 <repo>/.kanban/project.json
-<repo>/.kanban/items/<n>.md               YAML front matter + markdown body (hand-editable)
-<repo>/.kanban/items/<n>.activity.jsonl   timeline, append-only
-<repo>/.kanban/items/<n>/attachments/     files attached to the item (the folder is the source of truth)
+<repo>/.kanban/items/<n>/item.md            the card: YAML front matter + markdown body (hand-editable)
+<repo>/.kanban/items/<n>/activity.jsonl     its timeline, append-only
+<repo>/.kanban/items/<n>/attachments/       its files (the folder is the source of truth)
 ```
 
 Create a project by pointing at a repo (sidebar → +, or `POST /api/projects {"path": "~/Developer/my-app"}`).
 If the repo already has a `.kanban/` board it is used, otherwise one is created. **The board is part of the
 repo**: it ships with the project, so commit card changes together with your code (the server writes a
 `.kanban/.gitignore` for its lock and temp files and a `.gitattributes` that merges activity logs line by
-line). Note that a public repo makes its cards public. Removing a project only unregisters it; the files stay.
+line). Note that a public repo makes its cards public. Removing a project only unregisters it; the files stay. Each card is a self-contained folder; boards written in the older flat layout (`items/<n>.md`) are renamed into it the first time they load.
 
 If you would rather keep a board private, `git init` inside `<repo>/.kanban` and add that folder to the code
 repo's `.git/info/exclude`. The server then also auto-commits it (about a minute after the last change, with a

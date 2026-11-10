@@ -6,7 +6,7 @@
 - Styling is one stylesheet, `src/styles.css`, with tokens on `:root` and `[data-theme='dark']`. Use the `--c-<color>` tokens, not hex values, in components.
 
 ## Data
-- There is no central board store. Each project's cards live in its own code repo, in `<repo>/.kanban/` (`project.json`, `items/<n>.md` with YAML front matter + body, `items/<n>.activity.jsonl` append-only, `items/<n>/attachments/`). `.kanban/` is tracked by the code repo, so the board ships with the project (commit cards with code). Optionally it can be its own nested git repo (has a `.git`, excluded from the code repo), which `gitsync.mjs` then auto-commits and syncs. `data/` is gitignored.
+- There is no central board store. Each project's cards live in its own code repo, in `<repo>/.kanban/` (`project.json`, and one folder per card, `items/<n>/`, holding `item.md` with YAML front matter + body, `activity.jsonl` append-only, and `attachments/`). `.kanban/` is tracked by the code repo, so the board ships with the project (commit cards with code). Optionally it can be its own nested git repo (has a `.git`, excluded from the code repo), which `gitsync.mjs` then auto-commits and syncs. `data/` is gitignored.
 - Machine-local state lives in `KANBAN_CONFIG_DIR` (default `~/.config/agentic-kanban`): `actors.json` and `.registry.json` (project id → repo path). `store.mjs` `attachRepo` points a repo at the board; `gitsync.create(dir)` is one sync per nested `.kanban/` repo.
 - `mutate(fn, event)` in `store.mjs` diffs the draft against the previous state and writes only changed files. Use `KANBAN_GIT_SYNC=0` and a scratch `KANBAN_CONFIG_DIR` plus a scratch git repo when testing.
 - `scripts/install-launchd.sh` runs the production server at login.

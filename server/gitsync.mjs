@@ -154,7 +154,7 @@ export function create(dir, { label = 'board', exclude: extra = [], readme = BOA
   function nextFree(base) {
     let max = 0;
     for (const f of fs.readdirSync(path.join(dir, base, 'items'))) {
-      const m = /^(\d+)\./.exec(f);
+      const m = /^(\d+)(\.|$)/.exec(f);
       if (m) max = Math.max(max, Number(m[1]));
     }
     return max + 1;
@@ -185,9 +185,9 @@ export function create(dir, { label = 'board', exclude: extra = [], readme = BOA
   async function resolve(files) {
     const abs = (f) => path.join(dir, f);
     const items = [], rest = [];
-    for (const [file, stages] of files) (/^(?:[^/]+\/)?items\/\d+\.md$/.test(file) ? items : rest).push([file, stages]);
+    for (const [file, stages] of files) (/^(?:[^/]+\/)?items\/\d+\/item\.md$/.test(file) ? items : rest).push([file, stages]);
     const bothAdded = new Set();
-    for (const [file, stages] of items) if (stages.has(2) && stages.has(3) && !stages.has(1)) bothAdded.add(file.replace(/\.md$/, '.activity.jsonl'));
+    for (const [file, stages] of items) if (stages.has(2) && stages.has(3) && !stages.has(1)) bothAdded.add(file.replace(/item\.md$/, 'activity.jsonl'));
     for (const [file, stages] of rest) {
       if (bothAdded.has(file)) continue;
       if (file.endsWith('.jsonl')) {
@@ -212,9 +212,9 @@ export function create(dir, { label = 'board', exclude: extra = [], readme = BOA
       }
     }
     for (const [file, stages] of items) {
-      const [, base, n] = /^((?:[^/]+\/)?)items\/(\d+)\.md$/.exec(file); // base is "" or "<project>/"
+      const [, base, n] = /^((?:[^/]+\/)?)items\/(\d+)\/item\.md$/.exec(file); // base is "" or "<project>/"
       const pid = base ? base.slice(0, -1) : label;
-      const act = `${base}items/${n}.activity.jsonl`;
+      const act = `${base}items/${n}/activity.jsonl`;
       if (!stages.has(2)) {
         // Deleted here, edited there: keep the deletion.
         await git('rm', '-q', '--cached', '--', file);
@@ -231,9 +231,10 @@ export function create(dir, { label = 'board', exclude: extra = [], readme = BOA
         const theirsLog = (await show(`MERGE_HEAD:${act}`)) ?? '';
         fs.writeFileSync(abs(file), ours);
         fs.writeFileSync(abs(act), oursLog);
-        fs.writeFileSync(abs(`${base}items/${m}.md`), theirs.replace(/^number:.*$/m, `number: ${m}`));
-        fs.writeFileSync(abs(`${base}items/${m}.activity.jsonl`), theirsLog);
-        appendLines(abs(`${base}items/${m}.activity.jsonl`), noteEntry(`Another device also created #${n} (${pid}). It was kept here as #${m}; the local #${n} was left unchanged.`));
+        fs.mkdirSync(abs(`${base}items/${m}`), { recursive: true });
+        fs.writeFileSync(abs(`${base}items/${m}/item.md`), theirs.replace(/^number:.*$/m, `number: ${m}`));
+        fs.writeFileSync(abs(`${base}items/${m}/activity.jsonl`), theirsLog);
+        appendLines(abs(`${base}items/${m}/activity.jsonl`), noteEntry(`Another device also created #${n} (${pid}). It was kept here as #${m}; the local #${n} was left unchanged.`));
         st.conflicts.push(`${pid}#${n}: remote copy saved as #${m}`);
       } else {
         fs.writeFileSync(abs(file), await git('show', `:2:${file}`));
@@ -325,8 +326,8 @@ code repo around it. Auto-committed by the board server; hand edits are fine.
 
 \`\`\`
 project.json                 name, description, statuses, linked repos
-items/<n>.md                 one item: YAML front matter + markdown body
-items/<n>.activity.jsonl     the item's timeline, append-only
-items/<n>/attachments/       files attached to the item
+items/<n>/item.md           one card: YAML front matter + markdown body
+items/<n>/activity.jsonl    the card's timeline, append-only
+items/<n>/attachments/      files attached to the card
 \`\`\`
 `;

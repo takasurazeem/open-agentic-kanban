@@ -3,9 +3,9 @@
 // Every project keeps its cards in its own code repo, in <repo>/.kanban/ (see attachRepo):
 //
 //   <repo>/.kanban/project.json
-//   <repo>/.kanban/items/<n>.md              front matter (YAML) + markdown body
-//   <repo>/.kanban/items/<n>.activity.jsonl  append-only, one JSON object per line
-//   <repo>/.kanban/items/<n>/attachments/<file>   uploaded files; the folder listing is the source of truth
+//   <repo>/.kanban/items/<n>/item.md            front matter (YAML) + markdown body
+//   <repo>/.kanban/items/<n>/activity.jsonl     append-only, one JSON object per line
+//   <repo>/.kanban/items/<n>/attachments/<file> uploaded files; the folder listing is the source of truth
 //
 // .kanban/ is part of the code repo, so the board ships with the project (commit cards with your code). If
 // .kanban/ has its own .git it is a nested repo that the server also auto-commits and syncs. There is no
@@ -145,8 +145,8 @@ const p = {
   dir: (pid) => projDir(pid),
   project: (pid) => path.join(projDir(pid), 'project.json'),
   items: (pid) => path.join(projDir(pid), 'items'),
-  md: (pid, n) => path.join(projDir(pid), 'items', `${checkNum(n)}.md`),
-  log: (pid, n) => path.join(projDir(pid), 'items', `${checkNum(n)}.activity.jsonl`),
+  md: (pid, n) => path.join(projDir(pid), 'items', String(checkNum(n)), 'item.md'),
+  log: (pid, n) => path.join(projDir(pid), 'items', String(checkNum(n)), 'activity.jsonl'),
   itemDir: (pid, n) => path.join(projDir(pid), 'items', String(checkNum(n))),
   attachments: (pid, n) => path.join(projDir(pid), 'items', String(checkNum(n)), 'attachments'),
 };
@@ -328,12 +328,12 @@ function readProject(pid) {
     names = fs.readdirSync(p.items(pid));
   } catch {}
   for (const f of names) {
-    const m = /^(\d+)\.md$/.exec(f);
-    if (!m) continue;
+    const m = /^(\d+)$/.exec(f);
+    if (!m || !fs.existsSync(path.join(p.items(pid), f, 'item.md'))) continue; // a card is a folder holding item.md
     const n = Number(m[1]);
     const key = `item:${pid}/${n}`;
     if (String(n) !== m[1] || !validNumber(n)) {
-      setProblem(key, { kind: 'unreadable-item', project: pid, number: null, path: `${pid}/items/${f}`, message: `${pid}/items/${f}: not a canonical item filename; ignored` });
+      setProblem(key, { kind: 'unreadable-item', project: pid, number: null, path: `${pid}/items/${f}`, message: `${pid}/items/${f}: not a canonical item folder name; ignored` });
       continue;
     }
     try {
@@ -341,7 +341,7 @@ function readProject(pid) {
       if (it) proj.items.push(it);
       clearProblem(key);
     } catch (e) {
-      setProblem(key, { kind: 'unreadable-item', project: pid, number: n, path: `${pid}/items/${f}`, message: `${pid}/items/${f}: ${e.message} (left untouched)` });
+      setProblem(key, { kind: 'unreadable-item', project: pid, number: n, path: `${pid}/items/${f}/item.md`, message: `${pid}/items/${f}/item.md: ${e.message} (left untouched)` });
     }
   }
   proj.items.sort((a, b) => a.number - b.number);
@@ -505,12 +505,39 @@ function loadRepoProject(pid) {
   }
   try {
     acquireLock(projDir(pid));
+    migrateItemLayout(pid);
     startRoot(pid);
     clearProblem(key);
     return readProject(pid);
   } catch (e) {
     setProblem(key, { kind: 'locked-board', path: where, message: `${pid}: ${e.message}; skipped` });
     return null;
+  }
+}
+
+/**
+ * Older boards kept items/<n>.md and items/<n>.activity.jsonl side by side. Each card is now a folder,
+ * items/<n>/, holding item.md, activity.jsonl and attachments/, so a card is one self-contained unit.
+ * Boards in the old layout are renamed in place the first time they load.
+ */
+function migrateItemLayout(pid) {
+  const dir = p.items(pid);
+  let names = [];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const f of names) {
+    const m = /^([1-9]\d*)\.(md|activity\.jsonl)$/.exec(f);
+    if (!m) continue;
+    const to = path.join(dir, m[1], m[2] === 'md' ? 'item.md' : 'activity.jsonl');
+    if (fs.existsSync(to)) {
+      setProblem(`layout:${pid}/${f}`, { kind: 'layout', path: `${pid}/items/${f}`, message: `${pid}/items/${f}: ${m[1]}/${path.basename(to)} already exists; left in place` });
+      continue;
+    }
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.renameSync(path.join(dir, f), to);
   }
 }
 
@@ -574,6 +601,7 @@ export function attachRepo(rawPath, { name } = {}) {
       const meta = normalizeProject({ name: name?.trim() || path.basename(repo), repos: remote ? [remote] : [], createdAt: now() }, id);
       writeProjectMeta(meta);
     }
+    migrateItemLayout(id);
     startRoot(id);
     const proj = readProject(id);
     state.projects.push(proj);
@@ -661,7 +689,7 @@ function validate(prev, next) {
       checkId(proj.id);
       checkNum(it.number);
       if (!o && fs.existsSync(p.md(proj.id, it.number))) {
-        throw new HttpError(409, `${proj.id}/items/${it.number}.md already exists on disk; refusing to overwrite it`);
+        throw new HttpError(409, `${proj.id}/items/${it.number}/item.md already exists on disk; refusing to overwrite it`);
       }
       if (problems.has(`item:${proj.id}/${it.number}`)) {
         throw new HttpError(409, `${proj.id}#${it.number} has an unreadable file on disk; fix it by hand first`);
@@ -827,16 +855,16 @@ function applyExternal(rel) {
     owner.attachments = fresh;
     return { type: 'item', project: first, number: an, note: `${first}#${an}: attachments changed externally` };
   }
-  const m = second === 'items' && parts.length === 3 ? /^(\d+)\.(md|activity\.jsonl)$/.exec(third) : null;
-  if (!m || String(Number(m[1])) !== m[1] || !validNumber(Number(m[1]))) return null;
-  const n = Number(m[1]);
+  const isCardFile = second === 'items' && parts.length === 4 && /^[1-9]\d*$/.test(third ?? '') && /^(item\.md|activity\.jsonl)$/.test(parts[3]);
+  if (!isCardFile || !validNumber(Number(third))) return null;
+  const n = Number(third);
   const key = `item:${first}/${n}`;
   let fresh;
   try {
     fresh = readItem(first, n);
     clearProblem(key);
   } catch (e) {
-    setProblem(key, { kind: 'unreadable-item', project: first, number: n, path: `${first}/items/${n}.md`, message: `${first}/items/${n}.md: ${e.message} (left untouched)` });
+    setProblem(key, { kind: 'unreadable-item', project: first, number: n, path: `${first}/items/${n}/item.md`, message: `${first}/items/${n}/item.md: ${e.message} (left untouched)` });
     return null;
   }
   const at = proj.items.findIndex((x) => x.number === n);
@@ -886,14 +914,18 @@ function reconcile() {
       chk(p.project(pid), `${pid}/project.json`);
       const files = new Set();
       try {
-        for (const f of fs.readdirSync(p.items(pid))) if (/^[1-9]\d*\.(md|activity\.jsonl)$/.test(f)) files.add(f);
+        for (const f of fs.readdirSync(p.items(pid))) {
+          if (!/^[1-9]\d*$/.test(f)) continue;
+          files.add(`${f}/item.md`);
+          files.add(`${f}/activity.jsonl`);
+        }
       } catch {}
       for (const it of proj.items) {
-        files.add(`${it.number}.md`);
-        files.add(`${it.number}.activity.jsonl`);
+        files.add(`${it.number}/item.md`);
+        files.add(`${it.number}/activity.jsonl`);
       }
       for (const f of files) {
-        if (!validNumber(Number(f.split('.')[0]))) continue;
+        if (!validNumber(Number(f.split('/')[0]))) continue;
         chk(path.join(p.items(pid), f), `${pid}/items/${f}`);
       }
     }
