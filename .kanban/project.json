@@ -1,0 +1,48 @@
+{
+  "id": "kanban",
+  "name": "Open Agentic Kanban",
+  "description": "",
+  "visibility": "public",
+  "repos": [
+    "takasurazeem/open-agentic-kanban"
+  ],
+  "statuses": [
+    {
+      "id": "backlog",
+      "name": "Backlog",
+      "color": "gray",
+      "description": "Ideas and work not yet planned"
+    },
+    {
+      "id": "todo",
+      "name": "Todo",
+      "color": "green",
+      "description": "This item hasn't been started"
+    },
+    {
+      "id": "in_progress",
+      "name": "In progress",
+      "color": "yellow",
+      "description": "This is actively being worked on"
+    },
+    {
+      "id": "on_hold",
+      "name": "On hold",
+      "color": "orange",
+      "description": "Paused until something outside this item changes"
+    },
+    {
+      "id": "in_review",
+      "name": "In review",
+      "color": "blue",
+      "description": "Waiting on a human to review"
+    },
+    {
+      "id": "done",
+      "name": "Done",
+      "color": "purple",
+      "description": "This has been completed"
+    }
+  ],
+  "createdAt": "2026-11-05T04:01:01.953Z"
+}
