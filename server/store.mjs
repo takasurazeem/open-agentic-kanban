@@ -7,8 +7,9 @@
 //   <repo>/.kanban/items/<n>.activity.jsonl  append-only, one JSON object per line
 //   <repo>/.kanban/items/<n>/attachments/<file>   uploaded files; the folder listing is the source of truth
 //
-// .kanban/ is its own nested git repo, kept out of the code repo. There is no central board store. The
-// config dir holds only machine-local state:
+// .kanban/ is part of the code repo, so the board ships with the project (commit cards with your code). If
+// .kanban/ has its own .git it is a nested repo that the server also auto-commits and syncs. There is no
+// central board store. The config dir holds only machine-local state:
 //
 //   <config>/actors.json      who can be assigned (humans and agents)
 //   <config>/.registry.json   project id -> code repo folder
@@ -449,19 +450,26 @@ function watchDir(dir, prefix) {
   }
 }
 
-/** Does the code repo itself track its .kanban/ folder? Then it is not a nested repo of its own. */
-function trackedByCodeRepo(repo) {
-  try {
-    return !!gitOut(repo, 'ls-files', '--', BOARD_DIR);
-  } catch {
-    return false;
-  }
+/** Keep the server's lock and temp files out of git, and merge activity logs line by line. */
+function ensureBoardFiles(dir) {
+  const put = (name, text) => {
+    const f = path.join(dir, name);
+    if (!fs.existsSync(f)) fs.writeFileSync(f, text);
+  };
+  put('.gitignore', '.DS_Store\n.*.tmp-*\n.kanban.lock\n');
+  put('.gitattributes', '*.jsonl merge=union\n');
 }
 
+/**
+ * By default a board is just a folder in its code repo: it is tracked and shipped with the project, and you
+ * commit card changes together with code. If .kanban/ is its own git repo (it has a .git), the server also
+ * auto-commits and syncs it, so it can have a private remote of its own.
+ */
 function startRoot(pid) {
   const dir = projDir(pid);
+  ensureBoardFiles(dir);
   let sync = null;
-  if (!trackedByCodeRepo(registry[pid].path)) {
+  if (fs.existsSync(path.join(dir, '.git'))) {
     sync = gitsync.create(dir, { label: pid, readme: gitsync.BOARD_README });
     sync.init();
   }
@@ -524,23 +532,9 @@ function resolveRepo(raw) {
   }
 }
 
-/** Keep .kanban/ out of the code repo without touching its tracked files (local exclude, not .gitignore). */
-function excludeFromCodeRepo(repo) {
-  try {
-    const file = path.resolve(repo, gitOut(repo, 'rev-parse', '--git-path', 'info/exclude'));
-    const cur = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-    if (cur.split('\n').some((l) => ['/.kanban/', '.kanban/', '/.kanban', '.kanban'].includes(l.trim()))) return;
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.appendFileSync(file, (cur && !cur.endsWith('\n') ? '\n' : '') + '/.kanban/\n');
-  } catch (e) {
-    log(`could not exclude ${BOARD_DIR}/ from ${repo}: ${e.message}`);
-  }
-}
-
 function registerRepo(pid, repo) {
   registry[pid] = { path: repo };
   writeRegistry();
-  if (!trackedByCodeRepo(repo)) excludeFromCodeRepo(repo);
 }
 
 const repoOwner = (repo) => Object.entries(registry).find(([, v]) => v.path === repo)?.[0];

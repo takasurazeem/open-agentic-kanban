@@ -26,10 +26,18 @@ There is no central board store. **Every project keeps its cards in its own code
 ```
 
 Create a project by pointing at a repo (sidebar → +, or `POST /api/projects {"path": "~/Developer/my-app"}`).
-If the repo already has a `.kanban/` board it is used, otherwise one is created. `.kanban/` is its own
-private git repo, so cards never mix into the code history or leak from a public repo, and the code repo
-ignores it through `.git/info/exclude`, which leaves its tracked files untouched. If a code repo already
-tracks `.kanban/` itself, no nested repo is made. Removing a project only unregisters it; the files stay.
+If the repo already has a `.kanban/` board it is used, otherwise one is created. **The board is part of the
+repo**: it ships with the project, so commit card changes together with your code (the server writes a
+`.kanban/.gitignore` for its lock and temp files and a `.gitattributes` that merges activity logs line by
+line). Note that a public repo makes its cards public. Removing a project only unregisters it; the files stay.
+
+If you would rather keep a board private, `git init` inside `<repo>/.kanban` and add that folder to the code
+repo's `.git/info/exclude`. The server then also auto-commits it (about a minute after the last change, with a
+readable message like `demo#4: claude → needs_review`), and pulls/pushes it when it has a remote:
+
+```bash
+cd <repo>/.kanban && git init -b main && gh repo create <name> --private --source . --push
+```
 
 The only other state is machine-local, in `~/.config/agentic-kanban/` (override with `KANBAN_CONFIG_DIR`):
 `actors.json` (who can be assigned) and `.registry.json` (project id → repo folder). On first start the
@@ -37,18 +45,9 @@ server copies both from the old central folder (`~/Developer/kanban-data`, or `K
 them, and leaves that folder untouched; boards still sitting there are reported on `/api/sync` so you can
 copy them into their repos.
 
-The server watches every `.kanban/` folder, so hand edits and `git pull` show up live. A new board gets
-`git init` and auto-commits changes (about a minute after the last change, with a readable message like
-`demo#4: claude → needs_review`).
+The server watches every `.kanban/` folder, so hand edits and `git pull` show up live.
 
-To back a board up and sync it between machines, add a private remote to its `.kanban` repo; the server then
-pulls every ~5 minutes and pushes after each commit (never force-pushes; git errors are logged, never fatal):
-
-```bash
-cd <repo>/.kanban && gh repo create <name> --private --source . --push
-```
-
-On a merge conflict the local version wins and the other device's version is recorded in the item's activity
+For a nested board with a remote, on a merge conflict the local version wins and the other device's version is recorded in the item's activity
 (project files: saved under `.conflicts/`). Sync health is at `GET /api/sync` and shown in the top bar.
 Only one server can use a config dir at a time (`.kanban.lock`), and one server per board folder. The server
 listens on `127.0.0.1`; set `HOST` to change that (there is no auth), and write requests must be `application/json`.

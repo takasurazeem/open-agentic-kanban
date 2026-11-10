@@ -57,7 +57,7 @@ export function ProjectSettings({
             <span>Where the cards live</span>
             <span className="small">
               <code>{project.repoPath}/.kanban</code>
-              <span className="muted"> (its own git repo, ignored by the code repo)</span>
+              <span className="muted"> (part of the repo, so it ships with the project)</span>
             </span>
           </div>
           <label className="form-row">
