@@ -185,9 +185,9 @@ export default function App() {
           state={state}
           activeId={project?.id}
           onSelect={(id) => (go({ project: id, item: undefined, q: '' }), setNavOpen(false))}
-          onCreate={async (name) => {
+          onCreate={async (input) => {
             try {
-              const p = await actions.createProject(name);
+              const p = await actions.createProject(input);
               go({ project: p.id, item: undefined, q: '' });
             } catch (e) {
               setError((e as Error).message);
@@ -315,6 +315,7 @@ export default function App() {
           project={project}
           onClose={() => setSettingsOpen(false)}
           onSave={(patch) => run(actions.updateProject(project.id, patch))}
+          onMove={(path) => run(actions.moveProject(project.id, path))}
           onDelete={() => {
             run(actions.deleteProject(project.id));
             setSettingsOpen(false);

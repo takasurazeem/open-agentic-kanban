@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { apiMiddleware } from './api.mjs';
 import { DATA_DIR } from './store.mjs';
-import { flush } from './gitsync.mjs';
+import { flushAll } from './gitsync.mjs';
 
 const dist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
 const port = Number(process.env.PORT ?? 5173);
@@ -33,5 +33,5 @@ http
 
 // Commit any pending data changes before exiting (launchd / Ctrl-C).
 for (const sig of ['SIGINT', 'SIGTERM']) {
-  process.on(sig, () => flush().finally(() => process.exit(0)));
+  process.on(sig, () => flushAll().finally(() => process.exit(0)));
 }

@@ -7,6 +7,7 @@
 
 ## Data
 - Lives outside this repo, in `KANBAN_DATA_DIR` (default `~/Developer/kanban-data`, its own private git repo): `actors.json`, `<project>/project.json`, `<project>/items/<n>.md` (YAML front matter + body), `<project>/items/<n>.activity.jsonl` (append-only). Never commit board data here; `data/` is gitignored.
+- Each project's cards normally live in its own code repo, in `<repo>/.kanban/` (`project.json`, `items/…`), a nested git repo that the code repo ignores via `.git/info/exclude`. `<data dir>/.registry.json` maps project id → repo path (machine-local). Projects without a repo, and `actors.json`, stay in the central data dir. `store.mjs` `attachRepo`/`moveToRepo` set this up; `gitsync.create(dir)` is one sync per git repo that holds board data.
 - `mutate(fn, event)` in `store.mjs` diffs the draft against the previous state and writes only changed files. Use `KANBAN_GIT_SYNC=0` and a scratch `KANBAN_DATA_DIR` when testing.
 - `scripts/install-launchd.sh` runs the production server at login.
 

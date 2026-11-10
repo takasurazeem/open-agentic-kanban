@@ -5,7 +5,7 @@ import path from 'node:path';
 import {
   getState, mutate, subscribe, HttpError, now, slugify,
   findProject, findItem, findActor, pushActivity, nextItemNumber, getProblems,
-  saveAttachment, deleteAttachment, attachmentFile, MAX_ATTACHMENT_BYTES,
+  saveAttachment, deleteAttachment, attachmentFile, MAX_ATTACHMENT_BYTES, attachRepo, moveToRepo,
 } from './store.mjs';
 import * as gitsync from './gitsync.mjs';
 import { AGENT_STATES, PRIORITIES, SIZES, DEFAULT_STATUSES, STATUS_COLORS, normRepos } from './model.mjs';
@@ -243,7 +243,25 @@ route('GET', '/api/projects', () =>
   })),
 );
 
-route('POST', '/api/projects', ({ body }) =>
+/**
+ * Create a project. With `path`, point it at a code repo: the board in <repo>/.kanban/ is used if it
+ * exists, otherwise one is created there. Without `path` the project lives in the central data dir.
+ */
+route('POST', '/api/projects', ({ body }) => {
+  if (body.path) {
+    const { project, created } = attachRepo(body.path, { name: body.name });
+    const { items, ...meta } = project;
+    return { ...meta, created, itemCount: items.length };
+  }
+  return createCentralProject(body);
+});
+
+route('POST', '/api/projects/:pid/move', ({ params, body }) => {
+  const { items, ...meta } = moveToRepo(params.pid, body.path);
+  return { ...meta, itemCount: items.length };
+});
+
+const createCentralProject = (body) =>
   mutate((s) => {
     if (!body.name?.trim()) throw new HttpError(400, 'name is required');
     let id = slugify(body.name);
@@ -256,8 +274,7 @@ route('POST', '/api/projects', ({ body }) =>
     };
     s.projects.push(p);
     return p;
-  }, { type: 'project' }),
-);
+  }, { type: 'project' });
 
 route('PATCH', '/api/projects/:pid', ({ params, body }) =>
   mutate((s) => {

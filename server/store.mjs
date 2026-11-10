@@ -1,20 +1,25 @@
 // File-per-item store shared by the web UI (through the HTTP API) and agents (through MCP → HTTP).
 //
 //   <dir>/actors.json
+//   <dir>/.registry.json   machine-local: project id -> code repo folder (see attachRepo)
 //   <dir>/<projectId>/project.json
 //   <dir>/<projectId>/items/<n>.md              front matter (YAML) + markdown body
 //   <dir>/<projectId>/items/<n>.activity.jsonl  append-only, one JSON object per line
 //   <dir>/<projectId>/items/<n>/attachments/<file>   uploaded files; the folder listing is the source of truth
 //
+// A project can instead live inside its code repo, in <repo>/.kanban/ (project.json, items/...). That
+// folder is its own nested git repo, kept out of the code repo; see attachRepo / moveToRepo.
+//
 // The whole board is indexed in memory. Mutations persist only what changed, the data dir is watched
 // so hand edits / `git pull` are picked up, and gitsync.mjs auto-commits the dir.
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import { seed } from './seed.mjs';
-import { DEFAULT_STATUSES, normRepos } from './model.mjs';
+import { DEFAULT_STATUSES, normRepo, normRepos } from './model.mjs';
 import * as gitsync from './gitsync.mjs';
 import { appendLines } from './fsutil.mjs';
 
@@ -116,15 +121,28 @@ const checkNum = (n) => {
   if (!validNumber(n)) throw new HttpError(400, `Invalid item number "${n}"`);
   return n;
 };
+
+/** Board folder inside a code repo. */
+export const BOARD_DIR = '.kanban';
+// Projects that live in a code repo instead of the central data dir: id -> { path: <repo root> }.
+// Machine-local (absolute paths), so it is kept out of the data dir's git repo.
+let registry = {};
+const REGISTRY_FILE = path.join(DATA_DIR, '.registry.json');
+/** Where a project's project.json and items/ live. */
+const projDir = (pid) => {
+  checkId(pid);
+  const r = registry[pid];
+  return r ? path.join(r.path, BOARD_DIR) : path.join(DATA_DIR, pid);
+};
 const p = {
   actors: () => path.join(DATA_DIR, 'actors.json'),
-  dir: (pid) => path.join(DATA_DIR, checkId(pid)),
-  project: (pid) => path.join(DATA_DIR, checkId(pid), 'project.json'),
-  items: (pid) => path.join(DATA_DIR, checkId(pid), 'items'),
-  md: (pid, n) => path.join(DATA_DIR, checkId(pid), 'items', `${checkNum(n)}.md`),
-  log: (pid, n) => path.join(DATA_DIR, checkId(pid), 'items', `${checkNum(n)}.activity.jsonl`),
-  itemDir: (pid, n) => path.join(DATA_DIR, checkId(pid), 'items', String(checkNum(n))),
-  attachments: (pid, n) => path.join(DATA_DIR, checkId(pid), 'items', String(checkNum(n)), 'attachments'),
+  dir: (pid) => projDir(pid),
+  project: (pid) => path.join(projDir(pid), 'project.json'),
+  items: (pid) => path.join(projDir(pid), 'items'),
+  md: (pid, n) => path.join(projDir(pid), 'items', `${checkNum(n)}.md`),
+  log: (pid, n) => path.join(projDir(pid), 'items', `${checkNum(n)}.activity.jsonl`),
+  itemDir: (pid, n) => path.join(projDir(pid), 'items', String(checkNum(n))),
+  attachments: (pid, n) => path.join(projDir(pid), 'items', String(checkNum(n)), 'attachments'),
 };
 
 /* ---------- attachments ---------- */
@@ -321,6 +339,7 @@ function readProject(pid) {
     }
   }
   proj.items.sort((a, b) => a.number - b.number);
+  if (registry[pid]) proj.repoPath = registry[pid].path; // not stored in project.json
   return proj;
 }
 
@@ -336,7 +355,7 @@ function readAll() {
   }
   const projects = [];
   for (const d of fs.readdirSync(DATA_DIR, { withFileTypes: true })) {
-    if (!d.isDirectory() || d.name.startsWith('.')) continue;
+    if (!d.isDirectory() || d.name.startsWith('.') || registry[d.name]) continue; // moved into a repo
     if (!safeId(d.name)) {
       if (fs.existsSync(path.join(DATA_DIR, d.name, 'project.json'))) {
         setProblem(`project:${d.name}`, { kind: 'skipped-project', path: d.name, message: `${d.name}: folder name is not a valid project id; skipped` });
@@ -353,7 +372,7 @@ function readAll() {
   return { version: 1, actors, projects: sortProjects(projects) };
 }
 
-const projectMeta = ({ items, ...meta }) => meta;
+const projectMeta = ({ items, repoPath, ...meta }) => meta;
 const writeProjectMeta = (proj) => writeAtomic(p.project(proj.id), JSON.stringify(projectMeta(proj), null, 2) + '\n');
 function writeItemFull(pid, it) {
   writeAtomic(p.md(pid, it.number), itemToMarkdown(it));
@@ -372,8 +391,8 @@ function writeEverything(s) {
 
 /* ---------- one writer per data dir ---------- */
 
-const LOCK = path.join(DATA_DIR, '.kanban.lock');
-function acquireLock() {
+function acquireLock(dir = DATA_DIR) {
+  const LOCK = path.join(dir, '.kanban.lock');
   for (let i = 0; i < 3; i++) {
     try {
       fs.writeFileSync(LOCK, String(process.pid), { flag: 'wx' });
@@ -395,13 +414,244 @@ function acquireLock() {
           alive = err.code === 'EPERM';
         }
       }
-      if (alive) throw new Error(`Data dir ${DATA_DIR} is already in use by process ${pid}. Stop it first (or set KANBAN_DATA_DIR).`);
+      if (alive) throw new Error(`${dir} is already in use by process ${pid}. Stop it first (or set KANBAN_DATA_DIR).`);
       if (pid === process.pid) return;
       log(`taking over stale lock from process ${pid}`);
       fs.rmSync(LOCK, { force: true });
     }
   }
-  throw new Error(`Could not lock ${DATA_DIR}`);
+  throw new Error(`Could not lock ${dir}`);
+}
+
+/* ---------- boards that live in code repos ---------- */
+
+function readRegistry() {
+  try {
+    const j = JSON.parse(readText(REGISTRY_FILE) ?? '{}');
+    const out = {};
+    for (const [id, v] of Object.entries(j.projects ?? {})) if (safeId(id) && typeof v?.path === 'string') out[id] = { path: v.path };
+    return out;
+  } catch (e) {
+    log('bad .registry.json:', e.message);
+    return {};
+  }
+}
+const writeRegistry = () => writeAtomic(REGISTRY_FILE, JSON.stringify({ projects: registry }, null, 2) + '\n');
+
+let centralSync = null;
+const roots = new Map(); // project id -> { sync, watcher }; sync is null when the code repo itself tracks .kanban/
+
+/** Route change notes ("demo#4: claude → running") to the git repo that holds that project. */
+function notifyChanged(notes) {
+  const groups = new Map();
+  for (const n of notes) {
+    const pid = /^([^:#\s]+)/.exec(n)?.[1];
+    const sync = roots.has(pid) ? roots.get(pid).sync : centralSync;
+    if (sync) groups.set(sync, [...(groups.get(sync) ?? []), n]);
+  }
+  for (const [sync, list] of groups) sync.changed(list);
+}
+
+const gitOut = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+
+function watchDir(dir, prefix) {
+  try {
+    const w = fs.watch(dir, { recursive: true }, (type, filename) => {
+      if (!filename) return;
+      const rel = String(filename);
+      if (rel === '.git' || rel.startsWith('.git' + path.sep)) return;
+      onFsEvent(type, prefix ? path.join(prefix, rel) : rel);
+    });
+    w.on('error', (e) => log('watcher error:', e.message));
+    w.unref?.();
+    return w;
+  } catch (e) {
+    log('cannot watch', dir, e.message);
+    return null;
+  }
+}
+
+/** Does the code repo itself track its .kanban/ folder? Then it is not a nested repo of its own. */
+function trackedByCodeRepo(repo) {
+  try {
+    return !!gitOut(repo, 'ls-files', '--', BOARD_DIR);
+  } catch {
+    return false;
+  }
+}
+
+function startRoot(pid) {
+  const dir = projDir(pid);
+  let sync = null;
+  if (!trackedByCodeRepo(registry[pid].path)) {
+    sync = gitsync.create(dir, { label: pid, readme: gitsync.BOARD_README });
+    sync.init();
+  }
+  roots.set(pid, { sync, watcher: watchDir(dir, pid) });
+}
+
+function stopRoot(pid) {
+  const r = roots.get(pid);
+  if (!r) return;
+  const lock = path.join(projDir(pid), '.kanban.lock');
+  roots.delete(pid);
+  r.watcher?.close();
+  Promise.resolve(r.sync?.stop()).finally(() => {
+    try {
+      if (fs.readFileSync(lock, 'utf8') === String(process.pid)) fs.unlinkSync(lock);
+    } catch {}
+  });
+}
+
+/** Stop using a repo-hosted board without touching its files. */
+function detachRoot(pid) {
+  stopRoot(pid);
+  delete registry[pid];
+  writeRegistry();
+}
+
+function loadRepoProject(pid) {
+  const key = `project:${pid}`;
+  const where = registry[pid].path;
+  if (!fs.existsSync(p.project(pid))) {
+    setProblem(key, { kind: 'missing-board', path: where, message: `${pid}: no board in ${where}/${BOARD_DIR}; skipped (still registered)` });
+    return null;
+  }
+  try {
+    acquireLock(projDir(pid));
+    startRoot(pid);
+    clearProblem(key);
+    return readProject(pid);
+  } catch (e) {
+    setProblem(key, { kind: 'locked-board', path: where, message: `${pid}: ${e.message}; skipped` });
+    return null;
+  }
+}
+
+/** The git repo root that contains `raw`, or an HttpError. */
+function resolveRepo(raw) {
+  if (typeof raw !== 'string' || !raw.trim()) throw new HttpError(400, 'path is required');
+  const dir = path.resolve(expand(raw.trim()));
+  let st;
+  try {
+    st = fs.statSync(dir);
+  } catch {
+    throw new HttpError(400, `${dir} does not exist`);
+  }
+  if (!st.isDirectory()) throw new HttpError(400, `${dir} is not a folder`);
+  try {
+    return fs.realpathSync(gitOut(dir, 'rev-parse', '--show-toplevel'));
+  } catch {
+    throw new HttpError(400, `${dir} is not inside a git repository`);
+  }
+}
+
+/** Keep .kanban/ out of the code repo without touching its tracked files (local exclude, not .gitignore). */
+function excludeFromCodeRepo(repo) {
+  try {
+    const file = path.resolve(repo, gitOut(repo, 'rev-parse', '--git-path', 'info/exclude'));
+    const cur = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+    if (cur.split('\n').some((l) => ['/.kanban/', '.kanban/', '/.kanban', '.kanban'].includes(l.trim()))) return;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.appendFileSync(file, (cur && !cur.endsWith('\n') ? '\n' : '') + '/.kanban/\n');
+  } catch (e) {
+    log(`could not exclude ${BOARD_DIR}/ from ${repo}: ${e.message}`);
+  }
+}
+
+function registerRepo(pid, repo) {
+  registry[pid] = { path: repo };
+  writeRegistry();
+  if (!trackedByCodeRepo(repo)) excludeFromCodeRepo(repo);
+}
+
+const repoOwner = (repo) => Object.entries(registry).find(([, v]) => v.path === repo)?.[0];
+
+/**
+ * Point a code repo at the board: use <repo>/.kanban/ if it already has a board, otherwise create one.
+ * Returns the project (with its items) and whether a new board was created.
+ */
+export function attachRepo(rawPath, { name } = {}) {
+  reconcile();
+  const repo = resolveRepo(rawPath);
+  const owner = repoOwner(repo);
+  if (owner) throw new HttpError(409, `${repo} is already the board "${owner}"`);
+  const kdir = path.join(repo, BOARD_DIR);
+  const metaFile = path.join(kdir, 'project.json');
+  let rawMeta = null;
+  if (fs.existsSync(metaFile)) {
+    try {
+      rawMeta = JSON.parse(fs.readFileSync(metaFile, 'utf8'));
+    } catch (e) {
+      throw new HttpError(409, `${metaFile} is not valid JSON (${e.message}); fix or remove it first`);
+    }
+  }
+  const base = safeId(rawMeta?.id) ? rawMeta.id : slugify(name || rawMeta?.name || path.basename(repo));
+  let id = base;
+  for (let i = 2; state.projects.some((x) => x.id === id) || registry[id]; i++) id = `${base}-${i}`;
+
+  fs.mkdirSync(path.join(kdir, 'items'), { recursive: true });
+  acquireLock(kdir);
+  registerRepo(id, repo);
+  try {
+    if (!rawMeta) {
+      let remote = '';
+      try {
+        remote = normRepo(gitOut(repo, 'remote', 'get-url', 'origin'));
+      } catch {}
+      const meta = normalizeProject({ name: name?.trim() || path.basename(repo), repos: remote ? [remote] : [], createdAt: now() }, id);
+      writeProjectMeta(meta);
+    }
+    startRoot(id);
+    const proj = readProject(id);
+    state.projects.push(proj);
+    sortProjects(state.projects);
+    state.version = (state.version ?? 0) + 1;
+    notifyChanged([`${id}: ${rawMeta ? 'board attached' : 'board created'}`]);
+    emit({ type: 'project', project: id });
+    return { project: proj, created: !rawMeta };
+  } catch (e) {
+    stopRoot(id);
+    delete registry[id];
+    writeRegistry();
+    throw e;
+  }
+}
+
+/** Move a project out of the central data dir into a code repo's .kanban/ folder. */
+export function moveToRepo(pid, rawPath) {
+  reconcile();
+  const proj = findProject(state, pid);
+  if (registry[pid]) throw new HttpError(409, `"${pid}" already lives in ${registry[pid].path}`);
+  const repo = resolveRepo(rawPath);
+  const owner = repoOwner(repo);
+  if (owner) throw new HttpError(409, `${repo} already has the board "${owner}"`);
+  const kdir = path.join(repo, BOARD_DIR);
+  if (fs.existsSync(path.join(kdir, 'project.json'))) {
+    throw new HttpError(409, `${kdir} already has a board; attach that one instead of moving "${pid}" into it`);
+  }
+  const src = p.dir(pid);
+  fs.mkdirSync(kdir, { recursive: true });
+  acquireLock(kdir);
+  fs.cpSync(src, kdir, { recursive: true, filter: (f) => !/(^|[\\/])(\.kanban\.lock|\.[^\\/]*\.tmp-\d+)$/.test(f) });
+  registerRepo(pid, repo);
+  try {
+    startRoot(pid);
+    const fresh = readProject(pid);
+    const at = state.projects.findIndex((x) => x.id === pid);
+    state.projects[at] = fresh;
+    fs.rmSync(src, { recursive: true, force: true });
+    for (const k of [...sigs.keys()]) if (k.startsWith(src + path.sep)) sigs.delete(k);
+    state.version = (state.version ?? 0) + 1;
+    notifyChanged([`${pid}: board moved into its repo`]);
+    emit({ type: 'project', project: pid });
+    return fresh;
+  } catch (e) {
+    stopRoot(pid);
+    delete registry[pid];
+    writeRegistry();
+    throw e;
+  }
 }
 
 /* ---------- startup: load, migrate or seed ---------- */
@@ -414,9 +664,13 @@ function importSource() {
 function loadOrInit() {
   fs.mkdirSync(DATA_DIR, { recursive: true });
   acquireLock();
+  registry = readRegistry();
   // Pull remote changes first so a fresh machine picks up the existing board.
-  gitsync.init(DATA_DIR);
-  const hasProjects = fs.readdirSync(DATA_DIR, { withFileTypes: true }).some((d) => d.isDirectory() && safeId(d.name) && fs.existsSync(p.project(d.name)));
+  centralSync = gitsync.create(DATA_DIR, { label: 'central', exclude: ['.registry.json'] });
+  centralSync.init();
+  const hasProjects =
+    Object.keys(registry).length > 0 ||
+    fs.readdirSync(DATA_DIR, { withFileTypes: true }).some((d) => d.isDirectory() && safeId(d.name) && fs.existsSync(p.project(d.name)));
   if (!hasProjects && !fs.existsSync(p.actors())) {
     const src = importSource();
     let s;
@@ -438,9 +692,15 @@ function loadOrInit() {
       s = seed();
     }
     writeEverything(s);
-    gitsync.changed(["initial board import"]);
+    centralSync.changed(["initial board import"]);
   }
-  return readAll();
+  const s = readAll();
+  for (const pid of Object.keys(registry)) {
+    const proj = loadRepoProject(pid);
+    if (proj) s.projects.push(proj);
+  }
+  sortProjects(s.projects);
+  return s;
 }
 
 let state = loadOrInit();
@@ -496,6 +756,12 @@ function persist(prev, next) {
   const nextIds = new Set(next.projects.map((x) => x.id));
   for (const old of prev.projects) {
     if (nextIds.has(old.id)) continue;
+    if (registry[old.id]) {
+      // A board inside a code repo is only unregistered; its files (and git history) stay where they are.
+      note(`project ${old.id}`, `project detached (files stay in ${registry[old.id].path}/${BOARD_DIR})`);
+      detachRoot(old.id);
+      continue;
+    }
     fs.rmSync(p.dir(old.id), { recursive: true, force: true });
     for (const k of [...sigs.keys()]) if (k.startsWith(p.dir(old.id) + path.sep)) sigs.delete(k);
     note(`project ${old.id}`, 'project deleted');
@@ -563,7 +829,7 @@ export function mutate(fn, event) {
   const prev = state;
   const notes = persist(prev, draft); // throws before swapping state if validation fails
   state = draft;
-  gitsync.changed(notes);
+  notifyChanged(notes);
   emit(event);
   return result;
 }
@@ -676,7 +942,7 @@ function handleExternal(rel) {
   if (!ev) return; // our own write, or nothing relevant changed
   const { note, ...event } = ev;
   state.version = (state.version ?? 0) + 1;
-  gitsync.changed([note]);
+  notifyChanged([note]);
   emit(event);
 }
 
@@ -689,9 +955,9 @@ function reconcile() {
   try {
     chk(p.actors(), 'actors.json');
     const onDisk = new Set();
-    for (const d of fs.readdirSync(DATA_DIR, { withFileTypes: true })) {
-      if (!d.isDirectory() || !safeId(d.name)) continue;
-      const pid = d.name;
+    const ids = new Set(Object.keys(registry));
+    for (const d of fs.readdirSync(DATA_DIR, { withFileTypes: true })) if (d.isDirectory() && safeId(d.name)) ids.add(d.name);
+    for (const pid of ids) {
       if (!fs.existsSync(p.project(pid))) continue;
       onDisk.add(pid);
       const proj = state.projects.find((x) => x.id === pid);
@@ -735,13 +1001,7 @@ function onFsEvent(_type, filename) {
   );
 }
 
-try {
-  const w = fs.watch(DATA_DIR, { recursive: true }, onFsEvent);
-  w.on('error', (e) => log('watcher error:', e.message));
-  w.unref?.();
-} catch (e) {
-  log('cannot watch data dir:', e.message);
-}
+watchDir(DATA_DIR, '');
 
 /* ---------- helpers used by api.mjs ---------- */
 

@@ -15,13 +15,16 @@ export function Sidebar({
   state: BoardState;
   activeId?: string;
   onSelect: (id: string) => void;
-  onCreate: (name: string) => Promise<void>;
+  onCreate: (input: { name?: string; path?: string }) => Promise<void>;
   onOpenItem: (project: string, n: number) => void;
   legacy: boolean;
   onImport: () => void;
 }) {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
+  const [repoPath, setRepoPath] = useState('');
+  const [mode, setMode] = useState<'repo' | 'central'>('repo');
+  const close = () => (setCreating(false), setName(''), setRepoPath(''));
 
   // Everything agents are doing, or waiting on you for, across all projects.
   const work = state.projects.flatMap((p) =>
@@ -63,23 +66,50 @@ export function Sidebar({
         })}
         {creating && (
           <form
+            className="new-project"
             onSubmit={async (e) => {
               e.preventDefault();
-              if (!name.trim()) return;
-              await onCreate(name.trim());
-              setName('');
-              setCreating(false);
+              if (mode === 'repo' ? !repoPath.trim() : !name.trim()) return;
+              await onCreate(mode === 'repo' ? { path: repoPath.trim(), name: name.trim() || undefined } : { name: name.trim() });
+              close();
             }}
           >
+            {mode === 'repo' && (
+              <input
+                className="input"
+                autoFocus
+                spellCheck={false}
+                placeholder="Path to a git repo, e.g. ~/Developer/my-app"
+                value={repoPath}
+                onChange={(e) => setRepoPath(e.target.value)}
+                onKeyDown={(e) => e.key === 'Escape' && close()}
+              />
+            )}
             <input
               className="input"
-              autoFocus
-              placeholder="Project name"
+              autoFocus={mode === 'central'}
+              placeholder={mode === 'repo' ? 'Name (optional, defaults to the folder)' : 'Project name'}
               value={name}
               onChange={(e) => setName(e.target.value)}
-              onBlur={() => !name && setCreating(false)}
-              onKeyDown={(e) => e.key === 'Escape' && setCreating(false)}
+              onKeyDown={(e) => e.key === 'Escape' && close()}
             />
+            <p className="muted small">
+              {mode === 'repo'
+                ? 'Uses the board in the repo’s .kanban/ folder, or creates one there.'
+                : 'Stored in the central data folder, not in any repo.'}
+            </p>
+            <div className="row gap-sm">
+              <button className="btn btn-primary btn-sm" type="submit">
+                {mode === 'repo' ? 'Use repo' : 'Create'}
+              </button>
+              <button className="btn btn-sm" type="button" onClick={close}>
+                Cancel
+              </button>
+              <span className="spacer" />
+              <button className="btn btn-sm" type="button" onClick={() => setMode(mode === 'repo' ? 'central' : 'repo')}>
+                {mode === 'repo' ? 'No repo' : 'Use a repo'}
+              </button>
+            </div>
           </form>
         )}
       </div>

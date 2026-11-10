@@ -63,13 +63,15 @@ server.registerTool(
   'find_project',
   {
     description:
-      'Find the board project linked to a code repo. Pass the repo\'s git remote URL, its "owner/name", or its folder name ' +
-      '(try the remote first). Returns the matching projects, or none: then ask the user whether to create one with create_project.',
-    inputSchema: { repo: z.string().describe('git remote URL, owner/name, or folder name') },
+      'Find the board project for a code repo. Pass the repo\'s absolute folder path (best: it matches boards that live in the repo\'s ' +
+      '.kanban/ folder), its git remote URL, its "owner/name", or its folder name. Returns the matching projects, or none: then ask the ' +
+      'user whether to create one with create_project (pass the repo path so the cards are stored in the repo).',
+    inputSchema: { repo: z.string().describe('absolute folder path, git remote URL, owner/name, or folder name') },
   },
   tool(async ({ repo }) => {
     const all = await api('GET', '/projects');
-    const hits = all.filter((p) => repoMatches(p.repos, repo));
+    const inside = (dir, root) => dir === root || dir.startsWith(root.endsWith('/') ? root : `${root}/`);
+    const hits = all.filter((p) => (p.repoPath && repo.startsWith('/') && inside(repo, p.repoPath)) || repoMatches(p.repos, repo));
     return hits.length ? hits : `No project is linked to "${repo}".`;
   }),
 );
@@ -77,16 +79,21 @@ server.registerTool(
 server.registerTool(
   'create_project',
   {
-    description: 'Create a board project, optionally linked to code repos so agents in those repos find it with find_project.',
+    description:
+      'Create a board project. Pass `path` (absolute folder of a git repo) to keep its cards in that repo\'s .kanban/ folder: ' +
+      'an existing board there is used, otherwise one is created. Without `path` the project lives in the central data folder. ' +
+      'Optionally link code repos so agents in those repos find it with find_project.',
     inputSchema: {
-      name: z.string(),
+      name: z.string().optional().describe('required without `path`; defaults to the repo folder name'),
+      path: z.string().optional().describe('absolute path of a git repo to host the board'),
       description: z.string().optional(),
       repos: z.array(z.string()).optional().describe('git remote URLs, owner/name, or folder names'),
     },
   },
   tool(async (body) => {
     const p = await api('POST', '/projects', body);
-    return `Created project "${p.id}"${p.repos?.length ? ` linked to ${p.repos.join(', ')}` : ''}.`;
+    const where = p.repoPath ? ` in ${p.repoPath}/.kanban${p.created === false ? ' (existing board, ' + p.itemCount + ' items)' : ''}` : '';
+    return `${p.created === false ? 'Attached' : 'Created'} project "${p.id}"${where}${p.repos?.length ? `, linked to ${p.repos.join(', ')}` : ''}.`;
   }),
 );
 

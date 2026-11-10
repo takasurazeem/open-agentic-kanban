@@ -71,6 +71,8 @@ export interface Project {
   visibility: 'public' | 'private';
   /** Linked code repos, e.g. "owner/name"; agents use these to find the project. */
   repos?: string[];
+  /** Set when the board lives in a code repo's .kanban/ folder; absent for the central data folder. */
+  repoPath?: string;
   statuses: Status[];
   items: Item[];
   createdAt: string;

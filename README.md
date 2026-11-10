@@ -15,6 +15,19 @@ For a production build: `npm run build && npm start`.
 
 ## Where the data lives
 
+**Each project keeps its cards in its own code repo**, in `<repo>/.kanban/`. Create a project by pointing
+at a repo (sidebar → +, or `POST /api/projects {"path": "~/Developer/my-app"}`). If the repo already has
+a `.kanban/` board it is used, otherwise one is created. `.kanban/` is its own private git repo (so cards
+never mix into the code history or leak from a public repo), and the code repo ignores it through
+`.git/info/exclude`, which leaves its tracked files untouched. Removing a project from the board only
+unregisters it; the files stay in the repo. Which repo each project uses is remembered per machine in
+`<data dir>/.registry.json`. Move an existing central project into a repo with
+`POST /api/projects/<id>/move {"path": "…"}` or in Project settings.
+
+Items, attachments and the layout below are the same either way; for a repo board, drop the
+`<project>/` level (`<repo>/.kanban/project.json`, `<repo>/.kanban/items/…`). Projects created without a
+repo, plus `actors.json`, live in the central folder:
+
 The code is public; your board is not part of it. Data lives in a separate folder, by default
 `~/Developer/kanban-data` (override with `KANBAN_DATA_DIR`), one file per item so it diffs and merges well:
 
