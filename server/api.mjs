@@ -5,11 +5,10 @@ import path from 'node:path';
 import {
   getState, mutate, subscribe, HttpError, now, slugify,
   findProject, findItem, findActor, pushActivity, nextItemNumber, getProblems,
-  saveAttachment, deleteAttachment, attachmentFile, MAX_ATTACHMENT_BYTES, attachRepo, moveToRepo,
+  saveAttachment, deleteAttachment, attachmentFile, MAX_ATTACHMENT_BYTES, attachRepo,
 } from './store.mjs';
 import * as gitsync from './gitsync.mjs';
 import { AGENT_STATES, PRIORITIES, SIZES, DEFAULT_STATUSES, STATUS_COLORS, normRepos } from './model.mjs';
-import { fromLegacyProject } from './seed.mjs';
 
 const PRIORITY_RANK = { Urgent: 0, High: 1, Medium: 2, Low: 3 };
 
@@ -244,37 +243,15 @@ route('GET', '/api/projects', () =>
 );
 
 /**
- * Create a project. With `path`, point it at a code repo: the board in <repo>/.kanban/ is used if it
- * exists, otherwise one is created there. Without `path` the project lives in the central data dir.
+ * Create a project by pointing at a code repo: the board in <repo>/.kanban/ is used if it exists,
+ * otherwise one is created there.
  */
 route('POST', '/api/projects', ({ body }) => {
-  if (body.path) {
-    const { project, created } = attachRepo(body.path, { name: body.name });
-    const { items, ...meta } = project;
-    return { ...meta, created, itemCount: items.length };
-  }
-  return createCentralProject(body);
+  if (!body.path) throw new HttpError(400, 'path (a git repo) is required: boards live in <repo>/.kanban/');
+  const { project, created } = attachRepo(body.path, { name: body.name });
+  const { items, ...meta } = project;
+  return { ...meta, created, itemCount: items.length };
 });
-
-route('POST', '/api/projects/:pid/move', ({ params, body }) => {
-  const { items, ...meta } = moveToRepo(params.pid, body.path);
-  return { ...meta, itemCount: items.length };
-});
-
-const createCentralProject = (body) =>
-  mutate((s) => {
-    if (!body.name?.trim()) throw new HttpError(400, 'name is required');
-    let id = slugify(body.name);
-    while (s.projects.some((p) => p.id === id)) id = `${id}-2`;
-    const p = {
-      id, name: body.name.trim(), description: body.description ?? '',
-      visibility: body.visibility === 'public' ? 'public' : 'private',
-      repos: normRepos(body.repos),
-      statuses: structuredClone(DEFAULT_STATUSES), createdAt: now(), items: [],
-    };
-    s.projects.push(p);
-    return p;
-  }, { type: 'project' });
 
 route('PATCH', '/api/projects/:pid', ({ params, body }) =>
   mutate((s) => {
@@ -458,20 +435,6 @@ route('GET', '/api/next', ({ query }) => {
   const top = candidates[0];
   return top ? { project: top.p.id, ...top.it } : null;
 });
-
-route('POST', '/api/import', ({ body }) =>
-  mutate((s) => {
-    const added = [];
-    for (const lp of body.projects ?? []) {
-      if (!lp?.cards) continue;
-      let id = lp.id;
-      while (s.projects.some((p) => p.id === id)) id = `${id}-imported`;
-      s.projects.push(fromLegacyProject({ ...lp, id }, DEFAULT_STATUSES));
-      added.push(id);
-    }
-    return { added };
-  }, { type: 'project' }),
-);
 
 function sse(req, res) {
   res.writeHead(200, {

@@ -1,31 +1,35 @@
 // File-per-item store shared by the web UI (through the HTTP API) and agents (through MCP → HTTP).
 //
-//   <dir>/actors.json
-//   <dir>/.registry.json   machine-local: project id -> code repo folder (see attachRepo)
-//   <dir>/<projectId>/project.json
-//   <dir>/<projectId>/items/<n>.md              front matter (YAML) + markdown body
-//   <dir>/<projectId>/items/<n>.activity.jsonl  append-only, one JSON object per line
-//   <dir>/<projectId>/items/<n>/attachments/<file>   uploaded files; the folder listing is the source of truth
+// Every project keeps its cards in its own code repo, in <repo>/.kanban/ (see attachRepo):
 //
-// A project can instead live inside its code repo, in <repo>/.kanban/ (project.json, items/...). That
-// folder is its own nested git repo, kept out of the code repo; see attachRepo / moveToRepo.
+//   <repo>/.kanban/project.json
+//   <repo>/.kanban/items/<n>.md              front matter (YAML) + markdown body
+//   <repo>/.kanban/items/<n>.activity.jsonl  append-only, one JSON object per line
+//   <repo>/.kanban/items/<n>/attachments/<file>   uploaded files; the folder listing is the source of truth
 //
-// The whole board is indexed in memory. Mutations persist only what changed, the data dir is watched
-// so hand edits / `git pull` are picked up, and gitsync.mjs auto-commits the dir.
+// .kanban/ is its own nested git repo, kept out of the code repo. There is no central board store. The
+// config dir holds only machine-local state:
+//
+//   <config>/actors.json      who can be assigned (humans and agents)
+//   <config>/.registry.json   project id -> code repo folder
+//
+// The boards are indexed in memory. Mutations persist only what changed, each .kanban/ is watched so hand
+// edits / `git pull` are picked up, and gitsync.mjs auto-commits each one.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
-import { seed } from './seed.mjs';
-import { DEFAULT_STATUSES, normRepo, normRepos } from './model.mjs';
+import { DEFAULT_ACTORS, DEFAULT_STATUSES, normRepo, normRepos } from './model.mjs';
 import * as gitsync from './gitsync.mjs';
 import { appendLines } from './fsutil.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const expand = (p) => (p === '~' ? os.homedir() : p.startsWith('~/') ? path.join(os.homedir(), p.slice(2)) : p);
-export const DATA_DIR = path.resolve(expand(process.env.KANBAN_DATA_DIR || '~/Developer/kanban-data'));
+export const CONFIG_DIR = path.resolve(expand(process.env.KANBAN_CONFIG_DIR || '~/.config/agentic-kanban'));
+// Boards used to live in one central data dir. Actors and the repo registry are copied out of it once.
+const LEGACY_DIR = path.resolve(expand(process.env.KANBAN_DATA_DIR || '~/Developer/kanban-data'));
 
 export { AGENT_STATES, PRIORITIES, SIZES, DEFAULT_STATUSES } from './model.mjs';
 
@@ -127,15 +131,16 @@ export const BOARD_DIR = '.kanban';
 // Projects that live in a code repo instead of the central data dir: id -> { path: <repo root> }.
 // Machine-local (absolute paths), so it is kept out of the data dir's git repo.
 let registry = {};
-const REGISTRY_FILE = path.join(DATA_DIR, '.registry.json');
-/** Where a project's project.json and items/ live. */
+const REGISTRY_FILE = path.join(CONFIG_DIR, '.registry.json');
+/** Where a project's project.json and items/ live: its repo's .kanban/ folder. */
 const projDir = (pid) => {
   checkId(pid);
   const r = registry[pid];
-  return r ? path.join(r.path, BOARD_DIR) : path.join(DATA_DIR, pid);
+  if (!r) throw new HttpError(404, `No project "${pid}"`);
+  return path.join(r.path, BOARD_DIR);
 };
 const p = {
-  actors: () => path.join(DATA_DIR, 'actors.json'),
+  actors: () => path.join(CONFIG_DIR, 'actors.json'),
   dir: (pid) => projDir(pid),
   project: (pid) => path.join(projDir(pid), 'project.json'),
   items: (pid) => path.join(projDir(pid), 'items'),
@@ -288,7 +293,7 @@ function readActivity(file) {
     }
   }
   const key = `bad-activity:${file}`;
-  if (bad) setProblem(key, { kind: 'bad-activity', path: path.relative(DATA_DIR, file), message: `${path.relative(DATA_DIR, file)}: skipped ${bad} unparseable line(s)` });
+  if (bad) setProblem(key, { kind: 'bad-activity', path: file, message: `${file.replace(os.homedir(), '~')}: skipped ${bad} unparseable line(s)` });
   else clearProblem(key);
   return out;
 }
@@ -353,23 +358,7 @@ function readAll() {
   } catch (e) {
     log('bad actors.json:', e.message);
   }
-  const projects = [];
-  for (const d of fs.readdirSync(DATA_DIR, { withFileTypes: true })) {
-    if (!d.isDirectory() || d.name.startsWith('.') || registry[d.name]) continue; // moved into a repo
-    if (!safeId(d.name)) {
-      if (fs.existsSync(path.join(DATA_DIR, d.name, 'project.json'))) {
-        setProblem(`project:${d.name}`, { kind: 'skipped-project', path: d.name, message: `${d.name}: folder name is not a valid project id; skipped` });
-      }
-      continue;
-    }
-    try {
-      const proj = readProject(d.name);
-      if (proj) projects.push(proj);
-    } catch (e) {
-      log(`skipping project ${d.name}: ${e.message}`);
-    }
-  }
-  return { version: 1, actors, projects: sortProjects(projects) };
+  return { version: 1, actors, projects: [] };
 }
 
 const projectMeta = ({ items, repoPath, ...meta }) => meta;
@@ -379,19 +368,9 @@ function writeItemFull(pid, it) {
   writeAtomic(p.log(pid, it.number), jsonl(it.activity ?? []));
 }
 
-function writeEverything(s) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  writeAtomic(p.actors(), JSON.stringify(s.actors, null, 2) + '\n');
-  for (const proj of s.projects) {
-    if (!safeId(proj.id)) throw new Error(`unsafe project id "${proj.id}"`);
-    writeProjectMeta(proj);
-    for (const it of proj.items) writeItemFull(proj.id, it);
-  }
-}
+/* ---------- one server per config dir ---------- */
 
-/* ---------- one writer per data dir ---------- */
-
-function acquireLock(dir = DATA_DIR) {
+function acquireLock(dir = CONFIG_DIR) {
   const LOCK = path.join(dir, '.kanban.lock');
   for (let i = 0; i < 3; i++) {
     try {
@@ -414,7 +393,7 @@ function acquireLock(dir = DATA_DIR) {
           alive = err.code === 'EPERM';
         }
       }
-      if (alive) throw new Error(`${dir} is already in use by process ${pid}. Stop it first (or set KANBAN_DATA_DIR).`);
+      if (alive) throw new Error(`${dir} is already in use by process ${pid}. Stop it first (or set KANBAN_CONFIG_DIR).`);
       if (pid === process.pid) return;
       log(`taking over stale lock from process ${pid}`);
       fs.rmSync(LOCK, { force: true });
@@ -438,7 +417,6 @@ function readRegistry() {
 }
 const writeRegistry = () => writeAtomic(REGISTRY_FILE, JSON.stringify({ projects: registry }, null, 2) + '\n');
 
-let centralSync = null;
 const roots = new Map(); // project id -> { sync, watcher }; sync is null when the code repo itself tracks .kanban/
 
 /** Route change notes ("demo#4: claude → running") to the git repo that holds that project. */
@@ -446,7 +424,7 @@ function notifyChanged(notes) {
   const groups = new Map();
   for (const n of notes) {
     const pid = /^([^:#\s]+)/.exec(n)?.[1];
-    const sync = roots.has(pid) ? roots.get(pid).sync : centralSync;
+    const sync = roots.get(pid)?.sync;
     if (sync) groups.set(sync, [...(groups.get(sync) ?? []), n]);
   }
   for (const [sync, list] of groups) sync.changed(list);
@@ -618,82 +596,38 @@ export function attachRepo(rawPath, { name } = {}) {
   }
 }
 
-/** Move a project out of the central data dir into a code repo's .kanban/ folder. */
-export function moveToRepo(pid, rawPath) {
-  reconcile();
-  const proj = findProject(state, pid);
-  if (registry[pid]) throw new HttpError(409, `"${pid}" already lives in ${registry[pid].path}`);
-  const repo = resolveRepo(rawPath);
-  const owner = repoOwner(repo);
-  if (owner) throw new HttpError(409, `${repo} already has the board "${owner}"`);
-  const kdir = path.join(repo, BOARD_DIR);
-  if (fs.existsSync(path.join(kdir, 'project.json'))) {
-    throw new HttpError(409, `${kdir} already has a board; attach that one instead of moving "${pid}" into it`);
-  }
-  const src = p.dir(pid);
-  fs.mkdirSync(kdir, { recursive: true });
-  acquireLock(kdir);
-  fs.cpSync(src, kdir, { recursive: true, filter: (f) => !/(^|[\\/])(\.kanban\.lock|\.[^\\/]*\.tmp-\d+)$/.test(f) });
-  registerRepo(pid, repo);
-  try {
-    startRoot(pid);
-    const fresh = readProject(pid);
-    const at = state.projects.findIndex((x) => x.id === pid);
-    state.projects[at] = fresh;
-    fs.rmSync(src, { recursive: true, force: true });
-    for (const k of [...sigs.keys()]) if (k.startsWith(src + path.sep)) sigs.delete(k);
-    state.version = (state.version ?? 0) + 1;
-    notifyChanged([`${pid}: board moved into its repo`]);
-    emit({ type: 'project', project: pid });
-    return fresh;
-  } catch (e) {
-    stopRoot(pid);
-    delete registry[pid];
-    writeRegistry();
-    throw e;
-  }
-}
+/* ---------- startup ---------- */
 
-/* ---------- startup: load, migrate or seed ---------- */
-
-function importSource() {
-  const candidates = [process.env.KANBAN_IMPORT_JSON, path.join(root, 'data', 'board.json')].filter(Boolean).map((f) => path.resolve(expand(f)));
-  return candidates.find((f) => fs.existsSync(f));
+/** One-time: copy actors and the repo registry out of the old central data dir (which is left untouched). */
+function migrateLegacy() {
+  if (LEGACY_DIR === CONFIG_DIR) return;
+  for (const f of ['actors.json', '.registry.json']) {
+    const from = path.join(LEGACY_DIR, f);
+    const to = path.join(CONFIG_DIR, f);
+    if (fs.existsSync(from) && !fs.existsSync(to)) {
+      fs.copyFileSync(from, to);
+      log(`copied ${from} -> ${to}`);
+    }
+  }
 }
 
 function loadOrInit() {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
   acquireLock();
+  migrateLegacy();
   registry = readRegistry();
-  // Pull remote changes first so a fresh machine picks up the existing board.
-  centralSync = gitsync.create(DATA_DIR, { label: 'central', exclude: ['.registry.json'] });
-  centralSync.init();
-  const hasProjects =
-    Object.keys(registry).length > 0 ||
-    fs.readdirSync(DATA_DIR, { withFileTypes: true }).some((d) => d.isDirectory() && safeId(d.name) && fs.existsSync(p.project(d.name)));
-  if (!hasProjects && !fs.existsSync(p.actors())) {
-    const src = importSource();
-    let s;
-    if (src) {
-      s = JSON.parse(fs.readFileSync(src, 'utf8'));
-      // The old file kept projects in array order; keep that order via strictly increasing createdAt.
-      let last = '';
-      s.projects = (s.projects ?? []).map((proj) => {
-        let at = proj.createdAt ?? new Date().toISOString();
-        if (at <= last) at = new Date(Date.parse(last) + 1).toISOString();
-        last = at;
-        const out = normalizeProject({ ...proj, createdAt: at }, proj.id);
-        out.items = (proj.items ?? []).map((it) => normalizeItem(it, it.number));
-        return out;
-      });
-      s.actors = s.actors ?? [];
-      log(`migrating ${src} -> ${DATA_DIR}`);
-    } else {
-      s = seed();
+  if (!fs.existsSync(p.actors())) writeAtomic(p.actors(), JSON.stringify(DEFAULT_ACTORS, null, 2) + '\n');
+  // Projects still sitting in the old central folder are not loaded; say so instead of hiding them.
+  try {
+    for (const d of fs.readdirSync(LEGACY_DIR, { withFileTypes: true })) {
+      if (d.isDirectory() && safeId(d.name) && !registry[d.name] && fs.existsSync(path.join(LEGACY_DIR, d.name, 'project.json'))) {
+        setProblem(`legacy:${d.name}`, {
+          kind: 'legacy-project', path: path.join(LEGACY_DIR, d.name),
+          message: `${d.name}: still in the old data folder ${LEGACY_DIR}; copy it into its repo's ${BOARD_DIR}/ and attach that repo`,
+        });
+      }
     }
-    writeEverything(s);
-    centralSync.changed(["initial board import"]);
-  }
+  } catch {}
   const s = readAll();
   for (const pid of Object.keys(registry)) {
     const proj = loadRepoProject(pid);
@@ -760,20 +694,11 @@ function persist(prev, next) {
       // A board inside a code repo is only unregistered; its files (and git history) stay where they are.
       note(`project ${old.id}`, `project detached (files stay in ${registry[old.id].path}/${BOARD_DIR})`);
       detachRoot(old.id);
-      continue;
     }
-    fs.rmSync(p.dir(old.id), { recursive: true, force: true });
-    for (const k of [...sigs.keys()]) if (k.startsWith(p.dir(old.id) + path.sep)) sigs.delete(k);
-    note(`project ${old.id}`, 'project deleted');
   }
   for (const proj of next.projects) {
     const old = prevById.get(proj.id);
-    if (!old) {
-      writeProjectMeta(proj);
-      for (const it of proj.items) writeItemFull(proj.id, it);
-      note(`project ${proj.id}`, `project created (${proj.items.length} items)`);
-      continue;
-    }
+    if (!old) throw new HttpError(400, 'Projects are created by pointing at a git repo (attachRepo)');
     if (stable(projectMeta(old)) !== stable(projectMeta(proj))) {
       writeProjectMeta(proj);
       note(`project ${proj.id}`, 'project settings updated');
@@ -956,7 +881,6 @@ function reconcile() {
     chk(p.actors(), 'actors.json');
     const onDisk = new Set();
     const ids = new Set(Object.keys(registry));
-    for (const d of fs.readdirSync(DATA_DIR, { withFileTypes: true })) if (d.isDirectory() && safeId(d.name)) ids.add(d.name);
     for (const pid of ids) {
       if (!fs.existsSync(p.project(pid))) continue;
       onDisk.add(pid);
@@ -1001,7 +925,7 @@ function onFsEvent(_type, filename) {
   );
 }
 
-watchDir(DATA_DIR, '');
+watchDir(CONFIG_DIR, ''); // picks up hand edits to actors.json
 
 /* ---------- helpers used by api.mjs ---------- */
 

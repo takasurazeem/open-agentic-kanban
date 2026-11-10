@@ -80,12 +80,12 @@ server.registerTool(
   'create_project',
   {
     description:
-      'Create a board project. Pass `path` (absolute folder of a git repo) to keep its cards in that repo\'s .kanban/ folder: ' +
-      'an existing board there is used, otherwise one is created. Without `path` the project lives in the central data folder. ' +
-      'Optionally link code repos so agents in those repos find it with find_project.',
+      'Create a board project by pointing at a git repo: pass the repo\'s absolute folder as `path`. Its cards are kept in ' +
+      '<repo>/.kanban/ (an existing board there is used, otherwise one is created). Optionally link more code repos so agents ' +
+      'in those repos find it with find_project.',
     inputSchema: {
-      name: z.string().optional().describe('required without `path`; defaults to the repo folder name'),
-      path: z.string().optional().describe('absolute path of a git repo to host the board'),
+      path: z.string().describe('absolute path of the git repo that hosts the board'),
+      name: z.string().optional().describe('defaults to the repo folder name'),
       description: z.string().optional(),
       repos: z.array(z.string()).optional().describe('git remote URLs, owner/name, or folder names'),
     },

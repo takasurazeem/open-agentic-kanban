@@ -9,7 +9,6 @@ import { Sidebar } from './components/Sidebar';
 import { ProjectSettings } from './components/ProjectSettings';
 import { Icon } from './components/Icon';
 
-const LEGACY_KEY = 'open-agentic-kanban-v1';
 type View = 'board' | 'table';
 type Theme = 'system' | 'light' | 'dark';
 
@@ -81,7 +80,6 @@ export default function App() {
   const [theme, setTheme] = useTheme();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
-  const [legacy, setLegacy] = useState(() => !!storage.get(LEGACY_KEY));
 
   useEffect(() => {
     const on = () => setRoute(parseHash());
@@ -194,18 +192,6 @@ export default function App() {
             }
           }}
           onOpenItem={(pid, n) => (go({ project: pid, item: n }), setNavOpen(false))}
-          legacy={legacy}
-          onImport={async () => {
-            try {
-              const old = JSON.parse(storage.get(LEGACY_KEY) ?? '[]');
-              const { added } = await actions.importLegacy(old);
-              storage.remove(LEGACY_KEY);
-              setLegacy(false);
-              if (added[0]) go({ project: added[0], item: undefined, q: '' });
-            } catch (e) {
-              setError((e as Error).message);
-            }
-          }}
         />
         <div className="nav-scrim" onClick={() => setNavOpen(false)} />
 
@@ -213,7 +199,7 @@ export default function App() {
           {!project ? (
             <div className="empty-state">
               <h2>No projects yet</h2>
-              <p className="muted">Create one from the sidebar.</p>
+              <p className="muted">Point a project at a git repo from the sidebar; its cards live in the repo’s .kanban/ folder.</p>
             </div>
           ) : (
             <>
@@ -315,7 +301,6 @@ export default function App() {
           project={project}
           onClose={() => setSettingsOpen(false)}
           onSave={(patch) => run(actions.updateProject(project.id, patch))}
-          onMove={(path) => run(actions.moveProject(project.id, path))}
           onDelete={() => {
             run(actions.deleteProject(project.id));
             setSettingsOpen(false);

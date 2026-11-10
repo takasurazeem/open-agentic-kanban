@@ -18,10 +18,9 @@ const itemPath = (project: string, number: number, rest = '') =>
   `/projects/${encodeURIComponent(project)}/items/${number}${rest}`;
 
 export const actions = {
-  /** With `path`, points the project at a code repo: its .kanban/ board is used, or created if missing. */
-  createProject: (input: { name?: string; path?: string }) =>
+  /** Points a project at a code repo: its .kanban/ board is used, or created if missing. */
+  createProject: (input: { path: string; name?: string }) =>
     api<{ id: string; created?: boolean; itemCount?: number }>('POST', '/projects', input),
-  moveProject: (id: string, path: string) => api('POST', `/projects/${encodeURIComponent(id)}/move`, { path }),
   updateProject: (id: string, patch: object) => api('PATCH', `/projects/${encodeURIComponent(id)}`, patch),
   deleteProject: (id: string) => api('DELETE', `/projects/${encodeURIComponent(id)}`),
   createItem: (project: string, body: object) =>
@@ -47,7 +46,6 @@ export const actions = {
     api('DELETE', itemPath(project, number, `/attachments/${encodeURIComponent(name)}?actor=you`)),
   setAgent: (project: string, number: number, patch: object) =>
     api('PATCH', itemPath(project, number, '/agent'), { actor: 'you', ...patch }),
-  importLegacy: (projects: unknown[]) => api<{ added: string[] }>('POST', '/import', { projects }),
 };
 
 export interface SyncStatus {

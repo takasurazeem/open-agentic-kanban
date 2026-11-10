@@ -9,21 +9,16 @@ export function Sidebar({
   onSelect,
   onCreate,
   onOpenItem,
-  legacy,
-  onImport,
 }: {
   state: BoardState;
   activeId?: string;
   onSelect: (id: string) => void;
-  onCreate: (input: { name?: string; path?: string }) => Promise<void>;
+  onCreate: (input: { path: string; name?: string }) => Promise<void>;
   onOpenItem: (project: string, n: number) => void;
-  legacy: boolean;
-  onImport: () => void;
 }) {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState('');
   const [repoPath, setRepoPath] = useState('');
-  const [mode, setMode] = useState<'repo' | 'central'>('repo');
   const close = () => (setCreating(false), setName(''), setRepoPath(''));
 
   // Everything agents are doing, or waiting on you for, across all projects.
@@ -69,45 +64,34 @@ export function Sidebar({
             className="new-project"
             onSubmit={async (e) => {
               e.preventDefault();
-              if (mode === 'repo' ? !repoPath.trim() : !name.trim()) return;
-              await onCreate(mode === 'repo' ? { path: repoPath.trim(), name: name.trim() || undefined } : { name: name.trim() });
+              if (!repoPath.trim()) return;
+              await onCreate({ path: repoPath.trim(), name: name.trim() || undefined });
               close();
             }}
           >
-            {mode === 'repo' && (
-              <input
-                className="input"
-                autoFocus
-                spellCheck={false}
-                placeholder="Path to a git repo, e.g. ~/Developer/my-app"
-                value={repoPath}
-                onChange={(e) => setRepoPath(e.target.value)}
-                onKeyDown={(e) => e.key === 'Escape' && close()}
-              />
-            )}
             <input
               className="input"
-              autoFocus={mode === 'central'}
-              placeholder={mode === 'repo' ? 'Name (optional, defaults to the folder)' : 'Project name'}
+              autoFocus
+              spellCheck={false}
+              placeholder="Path to a git repo, e.g. ~/Developer/my-app"
+              value={repoPath}
+              onChange={(e) => setRepoPath(e.target.value)}
+              onKeyDown={(e) => e.key === 'Escape' && close()}
+            />
+            <input
+              className="input"
+              placeholder="Name (optional, defaults to the folder)"
               value={name}
               onChange={(e) => setName(e.target.value)}
               onKeyDown={(e) => e.key === 'Escape' && close()}
             />
-            <p className="muted small">
-              {mode === 'repo'
-                ? 'Uses the board in the repo’s .kanban/ folder, or creates one there.'
-                : 'Stored in the central data folder, not in any repo.'}
-            </p>
+            <p className="muted small">Uses the board in the repo’s .kanban/ folder, or creates one there.</p>
             <div className="row gap-sm">
               <button className="btn btn-primary btn-sm" type="submit">
-                {mode === 'repo' ? 'Use repo' : 'Create'}
+                Use repo
               </button>
               <button className="btn btn-sm" type="button" onClick={close}>
                 Cancel
-              </button>
-              <span className="spacer" />
-              <button className="btn btn-sm" type="button" onClick={() => setMode(mode === 'repo' ? 'central' : 'repo')}>
-                {mode === 'repo' ? 'No repo' : 'Use a repo'}
               </button>
             </div>
           </form>
@@ -149,14 +133,6 @@ export function Sidebar({
           })}
       </div>
 
-      {legacy && (
-        <div className="side-import">
-          <p>Boards from the previous version are still in this browser.</p>
-          <button className="btn btn-sm" onClick={onImport}>
-            Import them
-          </button>
-        </div>
-      )}
     </nav>
   );
 }

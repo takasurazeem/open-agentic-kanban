@@ -252,8 +252,6 @@ textarea.input { resize: vertical; line-height: 1.5; }
 .side-agents { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--border-muted); }
 .side-agent { display: flex; align-items: center; gap: 8px; padding: 4px 8px; font-size: 13px; }
 .side-agent .small { margin-left: auto; }
-.side-import { margin: 0 4px; padding: 10px; border: 1px dashed var(--border); border-radius: var(--radius); font-size: 12px; }
-.side-import p { margin: 0 0 8px; color: var(--fg-muted); }
 
 /* ---------- Project header / toolbar ---------- */
 .project-head { padding: 16px 24px 0; }

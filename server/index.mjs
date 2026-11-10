@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { apiMiddleware } from './api.mjs';
-import { DATA_DIR } from './store.mjs';
+import { CONFIG_DIR } from './store.mjs';
 import { flushAll } from './gitsync.mjs';
 
 const dist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
@@ -28,7 +28,7 @@ http
     }),
   )
   .listen(port, host, () => {
-    console.log(`Open Agentic Kanban on http://${host}:${port}  (data: ${DATA_DIR})`);
+    console.log(`Open Agentic Kanban on http://${host}:${port}  (config: ${CONFIG_DIR})`);
   });
 
 // Commit any pending data changes before exiting (launchd / Ctrl-C).

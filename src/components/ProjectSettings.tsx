@@ -7,13 +7,11 @@ import { Menu } from './Menu';
 export function ProjectSettings({
   project,
   onSave,
-  onMove,
   onDelete,
   onClose,
 }: {
   project: Project;
   onSave: (patch: Partial<Project>) => Promise<void>;
-  onMove: (path: string) => Promise<void>;
   onDelete: () => void;
   onClose: () => void;
 }) {
@@ -22,7 +20,6 @@ export function ProjectSettings({
   const [visibility, setVisibility] = useState(project.visibility);
   const [statuses, setStatuses] = useState<Status[]>(project.statuses);
   const [repos, setRepos] = useState((project.repos ?? []).join(', '));
-  const [movePath, setMovePath] = useState('');
 
   const update = (i: number, p: Partial<Status>) => setStatuses((s) => s.map((x, j) => (j === i ? { ...x, ...p } : x)));
   const move = (i: number, d: number) =>
@@ -58,35 +55,10 @@ export function ProjectSettings({
           </label>
           <div className="form-row">
             <span>Where the cards live</span>
-            {project.repoPath ? (
-              <span className="small">
-                In the repo: <code>{project.repoPath}/.kanban</code>
-                <span className="muted"> (its own git repo, ignored by the code repo)</span>
-              </span>
-            ) : (
-              <>
-                <span className="small muted">In the central data folder, not in any repo.</span>
-                <div className="row gap-sm">
-                  <input
-                    className="input"
-                    spellCheck={false}
-                    placeholder="Move into a repo: ~/Developer/my-app"
-                    value={movePath}
-                    onChange={(e) => setMovePath(e.target.value)}
-                  />
-                  <button
-                    className="btn btn-sm"
-                    disabled={!movePath.trim()}
-                    onClick={async () => {
-                      await onMove(movePath.trim());
-                      onClose();
-                    }}
-                  >
-                    Move
-                  </button>
-                </div>
-              </>
-            )}
+            <span className="small">
+              <code>{project.repoPath}/.kanban</code>
+              <span className="muted"> (its own git repo, ignored by the code repo)</span>
+            </span>
           </div>
           <label className="form-row">
             <span>Linked repos</span>

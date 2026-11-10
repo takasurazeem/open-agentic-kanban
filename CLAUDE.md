@@ -6,9 +6,9 @@
 - Styling is one stylesheet, `src/styles.css`, with tokens on `:root` and `[data-theme='dark']`. Use the `--c-<color>` tokens, not hex values, in components.
 
 ## Data
-- Lives outside this repo, in `KANBAN_DATA_DIR` (default `~/Developer/kanban-data`, its own private git repo): `actors.json`, `<project>/project.json`, `<project>/items/<n>.md` (YAML front matter + body), `<project>/items/<n>.activity.jsonl` (append-only). Never commit board data here; `data/` is gitignored.
-- Each project's cards normally live in its own code repo, in `<repo>/.kanban/` (`project.json`, `items/…`), a nested git repo that the code repo ignores via `.git/info/exclude`. `<data dir>/.registry.json` maps project id → repo path (machine-local). Projects without a repo, and `actors.json`, stay in the central data dir. `store.mjs` `attachRepo`/`moveToRepo` set this up; `gitsync.create(dir)` is one sync per git repo that holds board data.
-- `mutate(fn, event)` in `store.mjs` diffs the draft against the previous state and writes only changed files. Use `KANBAN_GIT_SYNC=0` and a scratch `KANBAN_DATA_DIR` when testing.
+- There is no central board store. Each project's cards live in its own code repo, in `<repo>/.kanban/` (`project.json`, `items/<n>.md` with YAML front matter + body, `items/<n>.activity.jsonl` append-only, `items/<n>/attachments/`). `.kanban/` is a nested git repo that the code repo ignores via `.git/info/exclude`. Never commit board data in this repo; `data/` is gitignored.
+- Machine-local state lives in `KANBAN_CONFIG_DIR` (default `~/.config/agentic-kanban`): `actors.json` and `.registry.json` (project id → repo path). `store.mjs` `attachRepo` points a repo at the board; `gitsync.create(dir)` is one sync per `.kanban/` repo.
+- `mutate(fn, event)` in `store.mjs` diffs the draft against the previous state and writes only changed files. Use `KANBAN_GIT_SYNC=0` and a scratch `KANBAN_CONFIG_DIR` plus a scratch git repo when testing.
 - `scripts/install-launchd.sh` runs the production server at login.
 
 ## Checks

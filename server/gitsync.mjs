@@ -18,7 +18,7 @@ const all = new Set();
  * `.kanban/` folder (its own nested repo). `label` names the project in messages when the repo
  * holds a single project; `exclude` lists extra paths to keep out of git.
  */
-export function create(dir, { label = 'board', exclude: extra = [], readme = README } = {}) {
+export function create(dir, { label = 'board', exclude: extra = [], readme = BOARD_README } = {}) {
   let notes = new Map(); // item/project key -> Set of notes, in first-seen order
   let firstAt = 0;
   let timer = null;
@@ -329,18 +329,4 @@ items/<n>.md                 one item: YAML front matter + markdown body
 items/<n>.activity.jsonl     the item's timeline, append-only
 items/<n>/attachments/       files attached to the item
 \`\`\`
-`;
-
-const README = `# Kanban data
-
-Private data for the Agentic Kanban board. Auto-committed by the board server; hand edits are fine.
-
-\`\`\`
-actors.json                          who can be assigned (humans and agents)
-<project>/project.json               name, description, visibility, statuses
-<project>/items/<n>.md               one item: YAML front matter + markdown body
-<project>/items/<n>.activity.jsonl   the item's timeline, append-only (one JSON object per line)
-\`\`\`
-
-Missing front-matter fields get defaults. \`*.jsonl\` files merge with the \`union\` strategy.
 `;

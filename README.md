@@ -15,50 +15,46 @@ For a production build: `npm run build && npm start`.
 
 ## Where the data lives
 
-**Each project keeps its cards in its own code repo**, in `<repo>/.kanban/`. Create a project by pointing
-at a repo (sidebar → +, or `POST /api/projects {"path": "~/Developer/my-app"}`). If the repo already has
-a `.kanban/` board it is used, otherwise one is created. `.kanban/` is its own private git repo (so cards
-never mix into the code history or leak from a public repo), and the code repo ignores it through
-`.git/info/exclude`, which leaves its tracked files untouched. Removing a project from the board only
-unregisters it; the files stay in the repo. Which repo each project uses is remembered per machine in
-`<data dir>/.registry.json`. Move an existing central project into a repo with
-`POST /api/projects/<id>/move {"path": "…"}` or in Project settings.
-
-Items, attachments and the layout below are the same either way; for a repo board, drop the
-`<project>/` level (`<repo>/.kanban/project.json`, `<repo>/.kanban/items/…`). Projects created without a
-repo, plus `actors.json`, live in the central folder:
-
-The code is public; your board is not part of it. Data lives in a separate folder, by default
-`~/Developer/kanban-data` (override with `KANBAN_DATA_DIR`), one file per item so it diffs and merges well:
+There is no central board store. **Every project keeps its cards in its own code repo**, in
+`<repo>/.kanban/`, one file per item so it diffs and merges well:
 
 ```
-actors.json
-<project>/project.json
-<project>/items/<n>.md               YAML front matter + markdown body (hand-editable)
-<project>/items/<n>.activity.jsonl   timeline, append-only
-<project>/items/<n>/attachments/     files attached to the item (the folder is the source of truth)
+<repo>/.kanban/project.json
+<repo>/.kanban/items/<n>.md               YAML front matter + markdown body (hand-editable)
+<repo>/.kanban/items/<n>.activity.jsonl   timeline, append-only
+<repo>/.kanban/items/<n>/attachments/     files attached to the item (the folder is the source of truth)
 ```
 
-Attachments preview inline in the item panel (images, video, audio, PDF, text) and are capped at 10 MB
-each (`KANBAN_MAX_ATTACHMENT_MB`). They are committed with the rest of the data folder, so keep large
-files elsewhere and link to them.
+Create a project by pointing at a repo (sidebar → +, or `POST /api/projects {"path": "~/Developer/my-app"}`).
+If the repo already has a `.kanban/` board it is used, otherwise one is created. `.kanban/` is its own
+private git repo, so cards never mix into the code history or leak from a public repo, and the code repo
+ignores it through `.git/info/exclude`, which leaves its tracked files untouched. If a code repo already
+tracks `.kanban/` itself, no nested repo is made. Removing a project only unregisters it; the files stay.
 
-The server watches the folder, so hand edits and `git pull` show up live. On first start it creates
-the folder, runs `git init`, and auto-commits changes (about a minute after the last change, with a
-readable message like `demo#4: claude → needs_review`). A fresh folder gets a small demo project
-(or imports an old `data/board.json` / `KANBAN_IMPORT_JSON` if present).
+The only other state is machine-local, in `~/.config/agentic-kanban/` (override with `KANBAN_CONFIG_DIR`):
+`actors.json` (who can be assigned) and `.registry.json` (project id → repo folder). On first start the
+server copies both from the old central folder (`~/Developer/kanban-data`, or `KANBAN_DATA_DIR`) if it finds
+them, and leaves that folder untouched; boards still sitting there are reported on `/api/sync` so you can
+copy them into their repos.
 
-To back it up and sync between machines, add a private remote; the server then pulls every ~5 minutes
-and pushes after each commit (never force-pushes; git errors are logged, never fatal):
+The server watches every `.kanban/` folder, so hand edits and `git pull` show up live. A new board gets
+`git init` and auto-commits changes (about a minute after the last change, with a readable message like
+`demo#4: claude → needs_review`).
+
+To back a board up and sync it between machines, add a private remote to its `.kanban` repo; the server then
+pulls every ~5 minutes and pushes after each commit (never force-pushes; git errors are logged, never fatal):
 
 ```bash
-cd ~/Developer/kanban-data && gh repo create <name> --private --source . --push
+cd <repo>/.kanban && gh repo create <name> --private --source . --push
 ```
 
 On a merge conflict the local version wins and the other device's version is recorded in the item's activity
-(project/actor files: saved under `.conflicts/`). Sync health is at `GET /api/sync` and shown in the top bar.
-Only one server can use a data dir at a time (`.kanban.lock`). The server listens on `127.0.0.1`; set `HOST` to change that
-(there is no auth), and write requests must be `application/json`.
+(project files: saved under `.conflicts/`). Sync health is at `GET /api/sync` and shown in the top bar.
+Only one server can use a config dir at a time (`.kanban.lock`), and one server per board folder. The server
+listens on `127.0.0.1`; set `HOST` to change that (there is no auth), and write requests must be `application/json`.
+
+Attachments preview inline in the item panel (images, video, audio, PDF, text) and are capped at 10 MB each
+(`KANBAN_MAX_ATTACHMENT_MB`). They are committed with the board, so keep large files elsewhere and link to them.
 
 Env: `KANBAN_GIT_SYNC=0` turns git off, `KANBAN_COMMIT_DELAY_MS` (default 60000) and
 `KANBAN_COMMIT_MAX_MS` (300000) tune the debounce.
@@ -71,7 +67,7 @@ scripts/uninstall-launchd.sh
 ```
 
 It writes `~/Library/LaunchAgents/com.agentic-kanban.board.plist` (logs: `~/Library/Logs/agentic-kanban.log`).
-Stop `npm run dev` first since both use port 5173; `PORT` and `KANBAN_DATA_DIR` are read from the environment at install time.
+Stop `npm run dev` first since both use port 5173; `PORT` and `KANBAN_CONFIG_DIR` are read from the environment at install time.
 
 ## Connect Claude
 

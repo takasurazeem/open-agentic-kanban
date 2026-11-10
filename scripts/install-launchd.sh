@@ -2,7 +2,7 @@
 # Install the board as an always-on launchd agent (starts at login, restarts if it dies).
 #   scripts/install-launchd.sh               install + load
 #   PLIST_OUT=/tmp/x.plist scripts/install-launchd.sh --write-only    just write the plist there
-# Env: PORT (default 5173), KANBAN_DATA_DIR (default ~/Developer/kanban-data)
+# Env: PORT (default 5173), KANBAN_CONFIG_DIR (default ~/.config/agentic-kanban; machine-local actors and repo registry)
 set -euo pipefail
 
 LABEL=com.agentic-kanban.board
@@ -21,7 +21,7 @@ if [[ -z "$NODE" ]]; then
   esac
 fi
 PORT="${PORT:-5173}"
-DATA_DIR="${KANBAN_DATA_DIR:-$HOME/Developer/kanban-data}"
+CONFIG_DIR="${KANBAN_CONFIG_DIR:-$HOME/.config/agentic-kanban}"
 LOG="$HOME/Library/Logs/agentic-kanban.log"
 PLIST="${PLIST_OUT:-$HOME/Library/LaunchAgents/$LABEL.plist}"
 
@@ -43,7 +43,7 @@ cat >"$PLIST" <<PLIST
   <key>EnvironmentVariables</key>
   <dict>
     <key>PORT</key><string>$PORT</string>
-    <key>KANBAN_DATA_DIR</key><string>$(esc "$DATA_DIR")</string>
+    <key>KANBAN_CONFIG_DIR</key><string>$(esc "$CONFIG_DIR")</string>
     <key>PATH</key><string>$(esc "$(dirname "$NODE")"):/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
   </dict>
   <key>RunAtLoad</key><true/>
@@ -61,7 +61,7 @@ fi
 
 (cd "$REPO" && npm run build)
 
-if lsof -ti ":$PORT" >/dev/null 2>&1; then
+if lsof -ti ":$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
   echo "Port $PORT is in use (a dev server?). Stop it first, then re-run." >&2
   exit 1
 fi

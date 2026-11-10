@@ -4,6 +4,11 @@ export const PRIORITIES = ['Urgent', 'High', 'Medium', 'Low'];
 export const SIZES = ['XS', 'S', 'M', 'L', 'XL'];
 export const STATUS_COLORS = ['gray', 'blue', 'green', 'yellow', 'orange', 'red', 'pink', 'purple'];
 
+export const DEFAULT_ACTORS = [
+  { id: 'you', kind: 'human', name: 'You' },
+  { id: 'claude', kind: 'agent', name: 'Claude', model: 'claude-opus-5-5' },
+];
+
 export const DEFAULT_STATUSES = [
   { id: 'backlog', name: 'Backlog', color: 'gray', description: 'Ideas and work not yet planned' },
   { id: 'todo', name: 'Todo', color: 'green', description: "This item hasn't been started" },
