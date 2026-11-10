@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { BoardState, Item } from './types';
+import type { Attachment, BoardState, Item } from './types';
 
 export class ApiError extends Error {}
 
@@ -28,6 +28,20 @@ export const actions = {
   deleteItem: (project: string, number: number) => api('DELETE', itemPath(project, number)),
   comment: (project: string, number: number, text: string) =>
     api('POST', itemPath(project, number, '/comments'), { actor: 'you', text }),
+  attachmentUrl: (project: string, number: number, name: string) =>
+    `/api${itemPath(project, number, `/attachments/${encodeURIComponent(name)}`)}`,
+  addAttachment: async (project: string, number: number, file: File) => {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    return api<Attachment>('POST', itemPath(project, number, '/attachments'), {
+      actor: 'you',
+      name: file.name || 'pasted-file',
+      content: btoa(bin),
+    });
+  },
+  deleteAttachment: (project: string, number: number, name: string) =>
+    api('DELETE', itemPath(project, number, `/attachments/${encodeURIComponent(name)}?actor=you`)),
   setAgent: (project: string, number: number, patch: object) =>
     api('PATCH', itemPath(project, number, '/agent'), { actor: 'you', ...patch }),
   importLegacy: (projects: unknown[]) => api<{ added: string[] }>('POST', '/import', { projects }),

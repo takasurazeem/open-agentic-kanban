@@ -3,6 +3,36 @@ import type { Actor, Item, Project } from '../types';
 import { AgentBadge, AvatarStack, Label, PriorityChip, StatusDot } from './bits';
 import { Icon } from './Icon';
 
+/** Collapsed and pinned columns are a per-viewer view preference, kept in this browser. */
+function useColumnPrefs(projectId: string) {
+  const key = `kanban.columns.${projectId}`;
+  const read = () => {
+    try {
+      const v = JSON.parse(localStorage.getItem(key) ?? '{}');
+      return { collapsed: Array.isArray(v.collapsed) ? (v.collapsed as string[]) : [], pinned: Array.isArray(v.pinned) ? (v.pinned as string[]) : [] };
+    } catch {
+      return { collapsed: [] as string[], pinned: [] as string[] };
+    }
+  };
+  const [prefs, setPrefs] = useState(read);
+  useEffect(() => setPrefs(read()), [key]); // eslint-disable-line react-hooks/exhaustive-deps
+  const toggle = (kind: 'collapsed' | 'pinned', id: string) =>
+    setPrefs((p) => {
+      const list = p[kind].includes(id) ? p[kind].filter((x) => x !== id) : [...p[kind], id];
+      const next = { ...p, [kind]: list };
+      try {
+        localStorage.setItem(key, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+  return { prefs, toggle };
+}
+
+const COLUMN_WIDTH = 340;
+const COLLAPSED_WIDTH = 48;
+const BOARD_GAP = 12;
+const BOARD_PAD = 24;
+
 interface Drop {
   status: string;
   index: number;
@@ -44,6 +74,7 @@ export function Board({
   const live = useRef({ drag, drop });
   live.current = { drag, drop };
   const suppressClick = useRef(false);
+  const { prefs, toggle } = useColumnPrefs(project.id);
 
   const columns = project.statuses.map((st) => ({
     status: st,
@@ -142,6 +173,7 @@ export function Board({
     document.body.classList.toggle('is-dragging', !!drag);
   }, [drag]);
 
+  let pinLeft = BOARD_PAD;
   const dragged = drag ? items.find((i) => i.number === drag.number) : undefined;
 
   return (
@@ -149,17 +181,60 @@ export function Board({
       {columns.map(({ status, items: colItems, total }) => {
         const isTarget = drop?.status === status.id;
         const visible = colItems.filter((i) => i.number !== drag?.number || !isTarget);
+        const collapsed = prefs.collapsed.includes(status.id);
+        const pinned = prefs.pinned.includes(status.id);
+        // A pinned column stays where it is in the row, but sticks to the left edge once you scroll
+        // past it. Several pinned columns stack side by side.
+        const style = pinned ? { left: pinLeft } : undefined;
+        if (pinned) pinLeft += (collapsed ? COLLAPSED_WIDTH : COLUMN_WIDTH) + BOARD_GAP;
+        const pinButton = (
+          <button
+            className={`icon-btn pin-btn ${pinned ? 'on' : ''}`}
+            title={pinned ? 'Unpin column' : 'Pin column in place while scrolling'}
+            aria-pressed={pinned}
+            onClick={() => toggle('pinned', status.id)}
+          >
+            <Icon name="pin" size={14} />
+          </button>
+        );
+        if (collapsed) {
+          return (
+            <section
+              key={status.id}
+              data-status={status.id}
+              style={style}
+              className={`column column-collapsed ${pinned ? 'column-pinned' : ''} ${isTarget ? 'column-target' : ''}`}
+              aria-label={`${status.name} (collapsed)`}
+            >
+              <button className="icon-btn" title="Expand column" onClick={() => toggle('collapsed', status.id)}>
+                <Icon name="chevronR" size={14} />
+              </button>
+              <span className="count">{total}</span>
+              <button className="column-collapsed-title" title={`Expand ${status.name}`} onClick={() => toggle('collapsed', status.id)}>
+                <StatusDot color={status.color} />
+                <span>{status.name}</span>
+              </button>
+              {pinButton}
+            </section>
+          );
+        }
         return (
           <section
             key={status.id}
             data-status={status.id}
-            className={`column ${isTarget ? 'column-target' : ''}`}
+            style={style}
+            className={`column ${pinned ? 'column-pinned' : ''} ${isTarget ? 'column-target' : ''}`}
             aria-label={status.name}
           >
             <header className="column-head">
               <StatusDot color={status.color} />
               <h3>{status.name}</h3>
               <span className="count">{filtered && total !== colItems.length ? `${colItems.length} / ${total}` : total}</span>
+              <span className="spacer" />
+              {pinButton}
+              <button className="icon-btn" title="Collapse column" onClick={() => toggle('collapsed', status.id)}>
+                <Icon name="chevronL" size={14} />
+              </button>
             </header>
             {status.description && <p className="column-desc">{status.description}</p>}
 
@@ -254,7 +329,7 @@ function Card({
           {plain(lastLog.text)}
         </p>
       )}
-      {(item.labels.length > 0 || item.priority || item.size || comments > 0 || item.agent.prUrl) && (
+      {(item.labels.length > 0 || item.priority || item.size || comments > 0 || item.agent.prUrl || (item.attachments?.length ?? 0) > 0) && (
         <div className="card-meta">
           {item.labels.map((l) => (
             <Label key={l} name={l} />
@@ -265,6 +340,11 @@ function Card({
           {item.agent.prUrl && (
             <span className="meta-icon" title="Pull request linked">
               <Icon name="pr" size={13} />
+            </span>
+          )}
+          {(item.attachments?.length ?? 0) > 0 && (
+            <span className="meta-icon" title={`${item.attachments!.length} attachments`}>
+              <Icon name="clip" size={13} /> {item.attachments!.length}
             </span>
           )}
           {comments > 0 && (

@@ -25,7 +25,7 @@ export interface Activity {
   id: string;
   at: string;
   actor: string;
-  kind: 'created' | 'comment' | 'status' | 'assigned' | 'renamed' | 'edited' | 'agent' | 'log' | 'link';
+  kind: 'created' | 'comment' | 'status' | 'assigned' | 'renamed' | 'edited' | 'agent' | 'log' | 'link' | 'attachment';
   text: string;
   meta?: Record<string, any>;
 }
@@ -40,6 +40,12 @@ export interface AgentInfo {
   updatedAt?: string;
 }
 
+export interface Attachment {
+  name: string;
+  size: number;
+  modifiedAt: string;
+}
+
 export interface Item {
   number: number;
   title: string;
@@ -52,6 +58,8 @@ export interface Item {
   assignees: string[];
   agent: AgentInfo;
   activity: Activity[];
+  /** Files in the item's attachments folder. */
+  attachments?: Attachment[];
   createdAt: string;
   updatedAt: string;
 }

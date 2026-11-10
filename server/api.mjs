@@ -1,8 +1,11 @@
 // HTTP API used by both the web UI and the MCP server. Mounted as Vite middleware in dev
 // (one port for everything) and by server/index.mjs in production.
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   getState, mutate, subscribe, HttpError, now, slugify,
   findProject, findItem, findActor, pushActivity, nextItemNumber, getProblems,
+  saveAttachment, deleteAttachment, attachmentFile, MAX_ATTACHMENT_BYTES,
 } from './store.mjs';
 import * as gitsync from './gitsync.mjs';
 import { AGENT_STATES, PRIORITIES, SIZES, DEFAULT_STATUSES, STATUS_COLORS, normRepos } from './model.mjs';
@@ -16,9 +19,64 @@ function send(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-async function readBody(req) {
+/** A file to stream back instead of a JSON body. */
+class FileResponse {
+  constructor({ file, name, size }) {
+    Object.assign(this, { file, name, size });
+  }
+}
+
+// Types that are safe to show in the browser. Everything else is sent as a download.
+const INLINE_TYPES = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
+  '.svg': 'image/svg+xml', '.txt': 'text/plain; charset=utf-8', '.md': 'text/plain; charset=utf-8',
+  '.log': 'text/plain; charset=utf-8', '.json': 'text/plain; charset=utf-8', '.csv': 'text/plain; charset=utf-8',
+  '.pdf': 'application/pdf', '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
+  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4',
+};
+
+function sendFile(req, res, f) {
+  const inline = INLINE_TYPES[path.extname(f.name).toLowerCase()];
+  const encoded = encodeURIComponent(f.name).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  // Single byte ranges, so video/audio can seek and text previews can stay small.
+  let start = 0, end = f.size - 1;
+  const rm = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? '');
+  res.statusCode = 200;
+  if (rm && (rm[1] || rm[2])) {
+    start = rm[1] ? Number(rm[1]) : Math.max(0, f.size - Number(rm[2]));
+    end = rm[1] && rm[2] ? Math.min(Number(rm[2]), f.size - 1) : f.size - 1;
+    if (start > end || start >= f.size) {
+      res.statusCode = 416;
+      res.setHeader('Content-Range', `bytes */${f.size}`);
+      return res.end();
+    }
+    res.statusCode = 206;
+    res.setHeader('Content-Range', `bytes ${start}-${end}/${f.size}`);
+  }
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Content-Type', inline ?? 'application/octet-stream');
+  res.setHeader('Content-Length', end - start + 1);
+  res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encoded}`);
+  // Uploaded files are untrusted: never let the browser guess a type or run scripts from them.
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  // Chrome's PDF viewer does not work inside a CSP sandbox; PDFs are not scripted HTML, so skip it for them.
+  if (inline !== 'application/pdf') {
+    res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; media-src 'self'");
+  }
+  res.setHeader('Cache-Control', 'private, no-cache');
+  const stream = fs.createReadStream(f.file, { start, end });
+  stream.on('error', () => res.destroy());
+  stream.pipe(res);
+}
+
+async function readBody(req, maxBytes = Infinity) {
   const chunks = [];
-  for await (const c of req) chunks.push(c);
+  let size = 0;
+  for await (const c of req) {
+    size += c.length;
+    if (size > maxBytes) throw new HttpError(413, `Request body is larger than ${Math.round(maxBytes / 1024 / 1024)} MB`);
+    chunks.push(c);
+  }
   if (!chunks.length) return {};
   try {
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
@@ -46,8 +104,12 @@ function nextRank(p, status) {
 
 /** Item summary for list endpoints: drops the body and activity to keep agent context small. */
 function summary(p, it) {
-  const { body, activity, ...rest } = it;
-  return { project: p.id, ...rest, comments: activity.filter((a) => a.kind === 'comment').length };
+  const { body, activity, attachments, ...rest } = it;
+  return {
+    project: p.id, ...rest,
+    comments: activity.filter((a) => a.kind === 'comment').length,
+    attachmentCount: (attachments ?? []).length,
+  };
 }
 
 function applyItemPatch(s, p, it, patch, actor) {
@@ -132,7 +194,7 @@ function setAgent(it, actor, { state, note, model, branch, prUrl, sessionUrl }, 
         it.rank = nextRank(p, to);
       }
     };
-    if (state === 'running' && it.status === 'todo') move('in_progress');
+    if (state === 'running' && (it.status === 'todo' || it.status === 'backlog')) move('in_progress');
     if (state === 'needs_review') move('in_review');
   }
 }
@@ -150,12 +212,12 @@ function itemMatches(it, q) {
 }
 
 const routes = [];
-const route = (method, pattern, fn) => {
+const route = (method, pattern, fn, opts = {}) => {
   const keys = [];
   const re = new RegExp(
     `^${pattern.replace(/:(\w+)/g, (_, k) => (keys.push(k), '([^/]+)'))}$`,
   );
-  routes.push({ method, re, keys, fn });
+  routes.push({ method, re, keys, fn, maxBody: opts.maxBody });
 };
 
 route('GET', '/api/state', () => getState());
@@ -244,7 +306,7 @@ route('POST', '/api/projects/:pid/items', ({ params, body }) =>
       priority: oneOf(body.priority ?? null, [...PRIORITIES, null], 'priority'),
       size: oneOf(body.size ?? null, [...SIZES, null], 'size'),
       labels: [...new Set((body.labels ?? []).map(String))], assignees: [], agent: { state: 'idle' },
-      activity: [], createdAt: now(), updatedAt: now(),
+      activity: [], attachments: [], createdAt: now(), updatedAt: now(),
     };
     pushActivity(it, actor, 'created');
     p.items.push(it);
@@ -285,6 +347,44 @@ route('POST', '/api/projects/:pid/items/:n/comments', ({ params, body }) =>
   }, { type: 'item', project: params.pid, number: Number(params.n) }),
 );
 
+/**
+ * Attachments live in <project>/items/<n>/attachments/. Upload as JSON so the API keeps its
+ * "JSON only" rule: { name, content: <base64>, actor? }. Files are downloaded with
+ * GET .../attachments/<name>.
+ */
+route(
+  'POST', '/api/projects/:pid/items/:n/attachments',
+  ({ params, body }) =>
+    mutate((s) => {
+      const p = findProject(s, params.pid);
+      const it = findItem(p, params.n);
+      const actor = actorOr(s, body.actor);
+      if (typeof body.content !== 'string' || !body.content) throw new HttpError(400, 'content (base64) is required');
+      const buf = Buffer.from(body.content.replace(/^data:[^,]*;base64,/, ''), 'base64');
+      const meta = saveAttachment(p.id, it, body.name, buf);
+      pushActivity(it, actor, 'attachment', meta.name, { action: 'added', name: meta.name, size: meta.size });
+      return meta;
+    }, { type: 'item', project: params.pid, number: Number(params.n) }),
+  { maxBody: Math.ceil((MAX_ATTACHMENT_BYTES * 4) / 3) + 64 * 1024 },
+);
+
+route('GET', '/api/projects/:pid/items/:n/attachments/:name', ({ params }) => {
+  const p = findProject(getState(), params.pid);
+  const it = findItem(p, params.n);
+  return new FileResponse(attachmentFile(p.id, it.number, params.name));
+});
+
+route('DELETE', '/api/projects/:pid/items/:n/attachments/:name', ({ params, query }) =>
+  mutate((s) => {
+    const p = findProject(s, params.pid);
+    const it = findItem(p, params.n);
+    const actor = actorOr(s, query.actor);
+    deleteAttachment(p.id, it, params.name);
+    pushActivity(it, actor, 'attachment', params.name, { action: 'removed', name: params.name });
+    return { ok: true };
+  }, { type: 'item', project: params.pid, number: Number(params.n) }),
+);
+
 route('PATCH', '/api/projects/:pid/items/:n/agent', ({ params, body }) =>
   mutate((s) => {
     const p = findProject(s, params.pid);
@@ -318,6 +418,8 @@ route('POST', '/api/projects/:pid/items/:n/claim', ({ params, body }) =>
 route('GET', '/api/next', ({ query }) => {
   const s = getState();
   const agent = query.agent ?? 'claude';
+  // include_todo falls back to the Todo column (not Backlog, which holds work that isn't planned yet).
+  const todoId = (p) => (p.statuses.some((x) => x.id === 'todo') ? 'todo' : p.statuses[0].id);
   const projects = query.project ? [findProject(s, query.project)] : s.projects;
   const candidates = [];
   for (const p of projects) {
@@ -325,7 +427,7 @@ route('GET', '/api/next', ({ query }) => {
       const mine = it.assignees.includes(agent);
       const free = !it.assignees.some((a) => findActor(s, a)?.kind === 'agent');
       if (it.agent.state === 'queued' && (mine || free)) candidates.push({ p, it, tier: 0 });
-      else if (query.include_todo && it.status === p.statuses[0].id && it.agent.state === 'idle' && free) {
+      else if (query.include_todo && it.status === todoId(p) && it.agent.state === 'idle' && free) {
         candidates.push({ p, it, tier: 1 });
       }
     }
@@ -385,8 +487,9 @@ export async function apiMiddleware(req, res, next) {
       const m = r.re.exec(url.pathname);
       if (!m) continue;
       const params = Object.fromEntries(r.keys.map((k, i) => [k, decodeURIComponent(m[i + 1])]));
-      const body = ['POST', 'PATCH', 'PUT'].includes(req.method) ? await readBody(req) : {};
+      const body = ['POST', 'PATCH', 'PUT'].includes(req.method) ? await readBody(req, r.maxBody) : {};
       const result = await r.fn({ params, body, query: Object.fromEntries(url.searchParams) });
+      if (result instanceof FileResponse) return sendFile(req, res, result);
       return send(res, 200, result);
     }
     send(res, 404, { error: `No route for ${req.method} ${url.pathname}` });

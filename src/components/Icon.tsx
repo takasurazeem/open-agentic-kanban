@@ -28,6 +28,10 @@ const paths: Record<string, string> = {
   inbox: 'M2 9.5l2-6h8l2 6v4H2zM2 9.5h3.5l1 1.5h3l1-1.5H14',
   arrowUp: 'M8 13V3M4 7l4-4 4 4',
   arrowDown: 'M8 3v10M4 9l4 4 4-4',
+  clip: 'M12.5 7.5l-4.7 4.7a2.5 2.5 0 0 1-3.5-3.5l5-5a1.7 1.7 0 0 1 2.4 2.4l-5 5a.8.8 0 0 1-1.2-1.2L10 5.5',
+  chevronL: 'M10 4L6 8l4 4',
+  chevronR: 'M6 4l4 4-4 4',
+  pin: 'M9.5 2.5l4 4M8.2 3.8l4 4-1.7 1.7L6.5 5.5zM6.8 9.2L3 13',
   menu: 'M2.5 4h11M2.5 8h11M2.5 12h11',
 };
 

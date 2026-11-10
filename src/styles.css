@@ -298,6 +298,12 @@ textarea.input { resize: vertical; line-height: 1.5; }
   background: var(--bg-subtle); border: 1px solid var(--border-muted); border-radius: var(--radius-lg);
   transition: border-color 0.12s, background 0.12s;
 }
+.column-pinned { position: sticky; z-index: 3; box-shadow: 4px 0 10px -4px rgb(0 0 0 / 0.25); }
+.column-collapsed { width: 48px; align-items: center; gap: 8px; padding: 10px 0; }
+.column-collapsed-title { display: flex; align-items: center; gap: 8px; writing-mode: vertical-rl; font-size: 14px; font-weight: 600; padding: 6px 0; color: var(--fg); }
+.column-collapsed-title:hover { color: var(--accent); }
+.column-collapsed .pin-btn { margin-top: auto; }
+.pin-btn.on { color: var(--accent); }
 .column-target { border-color: var(--accent); background: color-mix(in srgb, var(--accent-subtle) 50%, var(--bg-subtle)); }
 .column-head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 0; }
 .column-head h3 { font-size: 14px; font-weight: 600; }
@@ -520,3 +526,16 @@ a.dev-link { color: var(--accent); }
 .drag-ghost { position: fixed; z-index: 80; pointer-events: none; transform: rotate(1.5deg); }
 .drag-ghost .card { box-shadow: var(--shadow-lg); border-color: var(--accent); }
 body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
+
+/* Attachments */
+.attachments-over { border-color: var(--accent); background: var(--accent-subtle); }
+.attachments-error { padding: 8px 14px; font-size: 12px; color: var(--c-red); }
+.attachment-list { list-style: none; margin: 0; padding: 0; }
+.attachment { border-top: 1px solid var(--border); }
+.attachment-row { display: flex; align-items: center; gap: 8px; padding: 8px 14px; min-width: 0; }
+.attachment-name { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; min-width: 0; }
+.attachment-preview { padding: 0 14px 12px; }
+.attachment-preview img, .attachment-preview video { display: block; max-width: 100%; max-height: 420px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg-subtle); }
+.attachment-preview audio { width: 100%; }
+.attachment-preview iframe { width: 100%; height: 480px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-subtle); }
+.attachment-preview pre { margin: 0; max-height: 320px; overflow: auto; padding: 10px 12px; font-size: 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-subtle); white-space: pre-wrap; overflow-wrap: anywhere; }

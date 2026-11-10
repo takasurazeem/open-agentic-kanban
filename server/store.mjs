@@ -4,6 +4,7 @@
 //   <dir>/<projectId>/project.json
 //   <dir>/<projectId>/items/<n>.md              front matter (YAML) + markdown body
 //   <dir>/<projectId>/items/<n>.activity.jsonl  append-only, one JSON object per line
+//   <dir>/<projectId>/items/<n>/attachments/<file>   uploaded files; the folder listing is the source of truth
 //
 // The whole board is indexed in memory. Mutations persist only what changed, the data dir is watched
 // so hand edits / `git pull` are picked up, and gitsync.mjs auto-commits the dir.
@@ -54,6 +55,7 @@ export function normalizeItem(raw, number, fallbackTime) {
     assignees: Array.isArray(r.assignees) ? r.assignees.map(String) : [],
     agent: { state: 'idle', ...(r.agent && typeof r.agent === 'object' ? r.agent : {}) },
     activity: Array.isArray(r.activity) ? r.activity : [],
+    attachments: [], // derived from the item's attachments folder (see listAttachments), never stored in the .md
     createdAt: str(r.createdAt, t),
     updatedAt: str(r.updatedAt, str(r.createdAt, t)),
   };
@@ -121,7 +123,88 @@ const p = {
   items: (pid) => path.join(DATA_DIR, checkId(pid), 'items'),
   md: (pid, n) => path.join(DATA_DIR, checkId(pid), 'items', `${checkNum(n)}.md`),
   log: (pid, n) => path.join(DATA_DIR, checkId(pid), 'items', `${checkNum(n)}.activity.jsonl`),
+  itemDir: (pid, n) => path.join(DATA_DIR, checkId(pid), 'items', String(checkNum(n))),
+  attachments: (pid, n) => path.join(DATA_DIR, checkId(pid), 'items', String(checkNum(n)), 'attachments'),
 };
+
+/* ---------- attachments ---------- */
+
+export const MAX_ATTACHMENT_BYTES = (Number(process.env.KANBAN_MAX_ATTACHMENT_MB) || 10) * 1024 * 1024;
+
+/** The files in an item's attachments folder. The folder is the source of truth (hand-drop files in if you like). */
+export function listAttachments(pid, n) {
+  const dir = p.attachments(pid, n);
+  let entries = [];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const d of entries) {
+    if (!d.isFile() || d.name.startsWith('.')) continue; // skips temp files and .DS_Store
+    try {
+      const st = fs.statSync(path.join(dir, d.name));
+      out.push({ name: d.name, size: st.size, modifiedAt: st.mtime.toISOString() });
+    } catch {}
+  }
+  return out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+}
+
+/** A safe single path segment: no directories, control characters or leading dots. */
+function cleanFileName(raw) {
+  let s = path.basename(String(raw ?? '').replace(/\\/g, '/')).normalize('NFC');
+  s = s.replace(/[\x00-\x1f\x7f<>:"|?*]/g, '_').trim().replace(/^\.+/, '');
+  if (s.length > 120) {
+    const ext = path.extname(s).slice(0, 20);
+    s = s.slice(0, 120 - ext.length) + ext;
+  }
+  if (!s) throw new HttpError(400, 'A file name is required');
+  return s;
+}
+
+function freeName(dir, name) {
+  if (!fs.existsSync(path.join(dir, name))) return name;
+  const ext = path.extname(name);
+  const stem = name.slice(0, name.length - ext.length);
+  for (let i = 2; ; i++) {
+    const candidate = `${stem} (${i})${ext}`;
+    if (!fs.existsSync(path.join(dir, candidate))) return candidate;
+  }
+}
+
+/** Write a file into the item's attachments folder and refresh `item.attachments`. Never overwrites. */
+export function saveAttachment(pid, item, rawName, buf) {
+  if (!buf.length) throw new HttpError(400, 'The file is empty');
+  if (buf.length > MAX_ATTACHMENT_BYTES) {
+    throw new HttpError(413, `Attachments can be at most ${Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024)} MB`);
+  }
+  const dir = p.attachments(pid, item.number);
+  const name = freeName(dir, cleanFileName(rawName));
+  writeAtomic(path.join(dir, name), buf);
+  item.attachments = listAttachments(pid, item.number);
+  return item.attachments.find((a) => a.name === name);
+}
+
+export function deleteAttachment(pid, item, name) {
+  const found = listAttachments(pid, item.number).find((a) => a.name === name);
+  if (!found) throw new HttpError(404, `No attachment "${name}" on #${item.number}`);
+  const dir = p.attachments(pid, item.number);
+  removeFile(path.join(dir, found.name));
+  for (const d of [dir, p.itemDir(pid, item.number)]) {
+    try {
+      fs.rmdirSync(d); // only succeeds when empty
+    } catch {}
+  }
+  item.attachments = listAttachments(pid, item.number);
+}
+
+/** Absolute path and size of an attachment, matched by exact name against the folder listing. */
+export function attachmentFile(pid, number, name) {
+  const found = listAttachments(pid, Number(number)).find((a) => a.name === name);
+  if (!found) throw new HttpError(404, `No attachment "${name}" on #${number}`);
+  return { file: path.join(p.attachments(pid, Number(number)), found.name), name: found.name, size: found.size };
+}
 
 // Signature (mtime:size) of every file as last read or written by us; a mismatch means someone else changed it.
 const sigs = new Map();
@@ -202,6 +285,7 @@ function readItem(pid, n) {
   } catch {}
   const it = markdownToItem(text, n, t);
   it.activity = readActivity(p.log(pid, n));
+  it.attachments = listAttachments(pid, n);
   return it;
 }
 
@@ -462,6 +546,8 @@ function persist(prev, next) {
       if (seen.has(o.number)) continue;
       removeFile(p.md(proj.id, o.number));
       removeFile(p.log(proj.id, o.number));
+      fs.rmSync(p.itemDir(proj.id, o.number), { recursive: true, force: true }); // its attachments
+      for (const k of [...sigs.keys()]) if (k.startsWith(p.itemDir(proj.id, o.number) + path.sep)) sigs.delete(k);
       note(`${proj.id}#${o.number}`, 'deleted');
     }
   }
@@ -488,7 +574,7 @@ export function nextItemNumber(proj) {
   for (const pr of problems.values()) if (pr.project === proj.id && validNumber(pr.number)) max = Math.max(max, pr.number);
   try {
     for (const f of fs.readdirSync(p.items(proj.id))) {
-      const m = /^(\d+)\./.exec(f);
+      const m = /^(\d+)(\.|$)/.exec(f); // <n>.md, <n>.activity.jsonl, or the <n>/ attachments folder
       if (m) max = Math.max(max, Number(m[1]));
     }
   } catch {}
@@ -546,6 +632,15 @@ function applyExternal(rel) {
     if (!meta || stable(projectMeta(meta)) === stable(projectMeta(proj))) return null;
     Object.assign(proj, projectMeta(meta));
     return { type: 'project', project: first, note: `${first}: settings edited externally` };
+  }
+  if (second === 'items' && parts[3] === 'attachments' && /^[1-9]\d*$/.test(third ?? '')) {
+    const an = Number(third);
+    const owner = proj.items.find((x) => x.number === an);
+    if (!owner) return null;
+    const fresh = listAttachments(first, an);
+    if (stable(fresh) === stable(owner.attachments ?? [])) return null; // our own write
+    owner.attachments = fresh;
+    return { type: 'item', project: first, number: an, note: `${first}#${an}: attachments changed externally` };
   }
   const m = second === 'items' && parts.length === 3 ? /^(\d+)\.(md|activity\.jsonl)$/.exec(third) : null;
   if (!m || String(Number(m[1])) !== m[1] || !validNumber(Number(m[1]))) return null;

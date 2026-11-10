@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { actions } from '../api';
-import { PRIORITIES, SIZES, type Activity, type Actor, type Item, type Project } from '../types';
+import { PRIORITIES, SIZES, type Activity, type Actor, type Attachment, type Item, type Project } from '../types';
 import { AGENT_META, AgentBadge, Avatar, Label, PriorityChip, StatusPill, timeAgo } from './bits';
 import { Icon } from './Icon';
 import { Markdown } from './Markdown';
@@ -69,6 +69,7 @@ export function ItemPanel({
           <div className="panel-main">
             <AgentCard project={project} item={item} actors={actors} run={run} />
             <Description key={`d${item.number}`} item={item} onSave={(body) => patch({ body })} />
+            <Attachments key={`a${item.number}`} item={item} project={project} run={run} />
             <Timeline item={item} project={project} actors={actors} />
             <Composer key={`c${item.number}`} item={item} project={project} run={run} />
           </div>
@@ -440,6 +441,16 @@ function Timeline({ item, project, actors }: { item: Item; project: Project; act
             )}
           </>
         );
+      case 'attachment':
+        return m.action === 'removed' ? (
+          <>
+            removed <code>{m.name}</code>
+          </>
+        ) : (
+          <>
+            attached <code>{m.name}</code>
+          </>
+        );
       case 'log':
         return 'posted an update';
       default:
@@ -546,5 +557,147 @@ function LabelEditor({ labels, onSave }: { labels: string[]; onSave: (l: string[
         onBlur={add}
       />
     </div>
+  );
+}
+
+type PreviewKind = 'image' | 'video' | 'audio' | 'pdf' | 'text' | null;
+const PREVIEW_EXT: Record<string, PreviewKind> = {
+  png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', svg: 'image',
+  mp4: 'video', webm: 'video', mov: 'video',
+  mp3: 'audio', wav: 'audio', m4a: 'audio',
+  pdf: 'pdf',
+  txt: 'text', md: 'text', log: 'text', json: 'text', csv: 'text',
+};
+const previewKind = (name: string): PreviewKind => PREVIEW_EXT[name.split('.').pop()?.toLowerCase() ?? ''] ?? null;
+const MAX_TEXT_PREVIEW = 200_000;
+
+function formatSize(n: number) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/** Files attached to the item, with inline previews. Drop files on the box or use the button. */
+function Attachments({ item, project, run }: { item: Item; project: Project; run: Run }) {
+  const files = item.attachments ?? [];
+  const input = useRef<HTMLInputElement>(null);
+  const [over, setOver] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function upload(list: FileList | File[]) {
+    setError('');
+    setBusy(true);
+    try {
+      for (const f of Array.from(list)) await actions.addAttachment(project.id, item.number, f);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section
+      className={`box attachments ${over ? 'attachments-over' : ''}`}
+      aria-label="Attachments"
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes('Files')) (e.preventDefault(), setOver(true));
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setOver(false);
+        if (e.dataTransfer.files.length) upload(e.dataTransfer.files);
+      }}
+    >
+      <div className="box-head">
+        <span className="box-title">Attachments{files.length > 0 && ` (${files.length})`}</span>
+        <span className="spacer" />
+        <input ref={input} type="file" multiple hidden onChange={(e) => (e.target.files && upload(e.target.files), (e.target.value = ''))} />
+        <button className="btn btn-sm" disabled={busy} onClick={() => input.current?.click()}>
+          <Icon name="clip" size={12} /> {busy ? 'Uploading…' : 'Attach files'}
+        </button>
+      </div>
+      {error && <div className="attachments-error">{error}</div>}
+      {files.length === 0 ? (
+        <div className="box-body muted small">Drop files here or use Attach files. Images, video, audio, PDFs and text preview inline.</div>
+      ) : (
+        <ul className="attachment-list">
+          {files.map((f) => (
+            <AttachmentRow key={f.name} file={f} item={item} project={project} run={run} />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function AttachmentRow({ file, item, project, run }: { file: Attachment; item: Item; project: Project; run: Run }) {
+  const kind = previewKind(file.name);
+  const url = actions.attachmentUrl(project.id, item.number, file.name);
+  const [open, setOpen] = useState(kind === 'image'); // images show right away; the rest open on demand
+  const [text, setText] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || kind !== 'text' || text !== null) return;
+    let cancelled = false;
+    fetch(url, { headers: { Range: `bytes=0-${MAX_TEXT_PREVIEW - 1}` } })
+      .then((r) => r.text())
+      .then((t) => !cancelled && setText(file.size > MAX_TEXT_PREVIEW ? `${t.slice(0, MAX_TEXT_PREVIEW)}\n… (truncated, download for the full file)` : t))
+      .catch(() => !cancelled && setText('Could not load a preview.'));
+    return () => {
+      cancelled = true;
+    };
+  }, [open, kind, text, url, file.size]);
+
+  const isImage = kind === 'image';
+  const markdown = `${isImage ? '!' : ''}[${file.name}](${url})`;
+
+  return (
+    <li className="attachment">
+      <div className="attachment-row">
+        <Icon name="clip" size={14} />
+        <a href={url} target="_blank" rel="noreferrer" className="attachment-name" title="Open or download">
+          {file.name}
+        </a>
+        <span className="muted small">{formatSize(file.size)}</span>
+        <span className="spacer" />
+        {kind && kind !== 'image' && (
+          <button className="btn btn-sm" onClick={() => setOpen(!open)}>
+            {open ? 'Hide preview' : 'Preview'}
+          </button>
+        )}
+        <button
+          className="btn btn-sm"
+          title="Copy a Markdown link to paste into the description or a comment"
+          onClick={() => navigator.clipboard?.writeText(markdown)}
+        >
+          Copy link
+        </button>
+        <button
+          className="icon-btn danger-hover"
+          title={`Remove ${file.name}`}
+          onClick={() => {
+            if (confirm(`Remove "${file.name}"? This can't be undone.`)) run(actions.deleteAttachment(project.id, item.number, file.name));
+          }}
+        >
+          <Icon name="trash" size={14} />
+        </button>
+      </div>
+      {open && kind && (
+        <div className="attachment-preview">
+          {kind === 'image' && (
+            <a href={url} target="_blank" rel="noreferrer">
+              <img src={url} alt={file.name} loading="lazy" />
+            </a>
+          )}
+          {kind === 'video' && <video src={url} controls preload="metadata" />}
+          {kind === 'audio' && <audio src={url} controls preload="metadata" />}
+          {kind === 'pdf' && <iframe src={url} title={file.name} />}
+          {kind === 'text' && <pre>{text ?? 'Loading…'}</pre>}
+        </div>
+      )}
+    </li>
   );
 }

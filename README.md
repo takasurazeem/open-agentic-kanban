@@ -23,7 +23,12 @@ actors.json
 <project>/project.json
 <project>/items/<n>.md               YAML front matter + markdown body (hand-editable)
 <project>/items/<n>.activity.jsonl   timeline, append-only
+<project>/items/<n>/attachments/     files attached to the item (the folder is the source of truth)
 ```
+
+Attachments preview inline in the item panel (images, video, audio, PDF, text) and are capped at 10 MB
+each (`KANBAN_MAX_ATTACHMENT_MB`). They are committed with the rest of the data folder, so keep large
+files elsewhere and link to them.
 
 The server watches the folder, so hand edits and `git pull` show up live. On first start it creates
 the folder, runs `git init`, and auto-commits changes (about a minute after the last change, with a
@@ -125,5 +130,5 @@ Items waiting on you show a red badge in the sidebar and under the **Needs you**
 
 The UI and the MCP server both use it, so scripts can too: `GET /api/state`,
 `GET /api/events` (server-sent events), `/api/projects[/:id]`,
-`/api/projects/:id/items[/:number]` with `/comments`, `/agent`, `/claim`, and `GET /api/next?agent=`.
+`/api/projects/:id/items[/:number]` with `/comments`, `/agent`, `/claim`, `/attachments[/:name]` (upload as JSON `{name, content: <base64>}`), and `GET /api/next?agent=`.
 See [server/api.mjs](server/api.mjs).
